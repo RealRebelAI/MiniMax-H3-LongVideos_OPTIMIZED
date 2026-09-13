@@ -890,6 +890,7 @@ def body_of(pronoun, age=0):
 # because the request was about breasts and a pronoun this file was not given is not a
 # licence to guess an anatomy.
 _FIGURE = (
+    (13, 17, "small and developing, barely noticeable"),
     (18, 24, "grown and firm, sitting high on the chest"),
     (25, 34, "fully grown and full, sitting a little lower than in her early twenties"),
     (35, 44, "full and softer, settled lower with the weight of middle age"),
@@ -919,6 +920,9 @@ def figure_of(pronoun, age=0):
     if str(pronoun or "").strip().lower() != "she":
         return ""
     age = int(age or 0)
+    # For ages under 18, return empty - no breast description for minors
+    if age < 18:
+        return ""
     for lo, hi, said in _FIGURE:
         if lo <= age <= hi:
             # THE AGE IS NOT REPEATED HERE. body_of already states it in the same
