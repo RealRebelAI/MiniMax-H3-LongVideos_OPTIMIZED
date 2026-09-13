@@ -8002,6 +8002,12 @@ class H3LongVideos:
                                "Nothing is rewritten. What you type is what the shot is told, "
                                "plus the scene line. Put a quoted \"line of dialogue\" in a beat "
                                "and that shot keeps its audio; beats without one are silenced."}),
+                "prompt_enhancer_model": (
+                    ["Qwen3.5", "Qwen3.8"],
+                    {"default": "Qwen3.5",
+                     "tooltip": "Text model to enhance the prompt. Uses Qwen text encoder "
+                                "from models/text_encoders. The model improves the prompt "
+                                "before it is passed to the sampler."}),
                 "resolution": (list(NATIVE_RES), {"default": "16:9",
                     "tooltip": "Aspect ratio. megapixels sets the size."}),
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
