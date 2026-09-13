@@ -61,9 +61,11 @@ class H3PromptEnhancer:
 
         # Detect content type and enhance accordingly
         content_type = self._detect_content_type(prompt)
-        enhanced = self._enhance_prompt(prompt, content_type)
+        
+        # Apply enhancements directly to the prompt
+        enhanced_prompt = self._apply_scenario_enhancements(prompt, content_type)
 
-        return (enhanced,)
+        return (enhanced_prompt,)
 
     def _find_model_path(self, model_name):
         """Find the model file path."""
@@ -115,8 +117,8 @@ class H3PromptEnhancer:
                 return best_cat
         return "general"
 
-    def _enhance_prompt(self, prompt, content_type):
-        """Enhance the prompt based on detected content type."""
+    def _apply_scenario_enhancements(self, prompt, content_type):
+        """Apply scenario-specific enhancements to the prompt."""
         
         enhancements = {
             "child": [
