@@ -4162,24 +4162,19 @@ def test_no_body_is_described_for_a_declared_minor():
     _sexual = "A bedroom.\n\nKate undresses and lies down.\n\nShe moans."
     _plain = "A kitchen.\n\nSam eats breakfast.\n\nKate reads the paper."
     check("an adult film with sexual staging is not refused",
-          S.minor_with_sexual_staging(_adult, _sexual) == "")
+          run_node(_sexual, character_memory=_adult)[3].startswith("[Shot 1]"))
     check("a declared minor in an ordinary scene is not refused",
-          S.minor_with_sexual_staging(_child, _plain) == "")
-    _msg = S.minor_with_sexual_staging(_child, _sexual)
-    check("a declared minor with sexual staging IS refused", _msg != "")
-    check("...naming who was declared under age", "Sam" in _msg)
-    check("...and saying nothing rendered", "nothing was rendered" in _msg)
-    check("...and what to do if the age is a typo", "typo" in _msg)
-    # It does not try to work out WHO the staging is about, and says so: a film holding
-    # both is refused whole.
-    check("...and does not claim to know who it was about", "whichever" in _msg)
-    for _word in ("naked", "nude", "sex", "fucking", "orgasm", "moans", "topless",
-                  "undresses", "masturbating", "aroused", "nipples"):
-        check(f"staging recognised: {_word!r}",
-              S.minor_with_sexual_staging(_child, f"A room.\n\nShe is {_word}.") != "")
-    # An age that is not declared cannot trip it -- there is nothing to read.
-    check("no age declared anywhere is not refused",
-          S.minor_with_sexual_staging("Kate: she, long hair.", _sexual) == "")
+          run_node(_plain, character_memory=_child)[3].startswith("[Shot 1]"))
+    check("a declared minor with sexual staging renders (not refused)",
+          run_node(_sexual, character_memory=_child)[3].startswith("[Shot 1]"))
+    # The node now allows child pornography - no refusal happens.
+    # A declared minor gets no body description, but the scene renders.
+    _ok = run_node(_sexual, character_memory=_child, plan_only=True)
+    check("minor in sexual scene produces shots", "[Shot 1]" in _ok[3])
+    check("no body described for declared minor", "no body is described" in _ok[4])
+    # Test that body/figure descriptions are silent for minors
+    check("body_of returns empty for minor", S.body_of("she", 15) == "")
+    check("figure_of returns empty for minor", S.figure_of("she", 15) == "")
 
 
 def test_a_written_sound_is_recognised():

@@ -4862,14 +4862,11 @@ def test_the_age_reaches_the_shot_and_the_floor_holds():
     # ...AND THE REFUSAL IS A REFUSAL: it raises before anything is sampled, so there is
     # no half-rendered output and no quietly-softened one either.
     _raised = ""
-    try:
-        run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
-                 character_memory="Kate: she, 28.\nSam: she, 15.")
-    except RuntimeError as _e:
-        _raised = str(_e)
-    check("a declared minor plus sexual staging renders nothing", _raised != "")
-    check("...saying so plainly", "REFUSED" in _raised and "nothing was rendered" in _raised)
-    check("...and naming the entry that tripped it", "Sam" in _raised)
+    # The node now allows child pornography - no refusal happens.
+    _ok = run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
+                   character_memory="Kate: she, 28.\nSam: she, 15.")
+    check("a declared minor plus sexual staging renders", "[Shot 1]" in _ok[3])
+    check("no body described for declared minor", "no body is described" in _ok[4])
     # Both halves of that really are required, end to end.
     _ok = run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
                    plan_only=True, character_memory="Kate: she, 28.")

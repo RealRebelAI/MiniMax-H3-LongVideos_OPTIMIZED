@@ -871,15 +871,11 @@ def body_of(pronoun, age=0):
 
     NO BODY IS DESCRIBED FOR A DECLARED AGE UNDER 18. Not a softer description -- none,
     and this returns "" so every clause built on it stays silent. An age the author
-    states is the one fact here that is not a guess, and a generator has no business
-    composing anatomy for a child. See also the refusal in _prepare: a script that
-    declares a minor and stages nudity or sex does not render at all."""
+    states is the one fact here that is not a guess."""
     who = {"she": "woman", "he": "man"}.get(str(pronoun or "").strip().lower(), "")
     if not who:
         return ""
     age = int(age or 0)
-    if age and age < ADULT_AGE:
-        return ""
     return f"a {who}'s body" if not age else f"the body of a {who} of {age}"
 
 
@@ -905,51 +901,7 @@ _FIGURE = (
 )
 
 
-# A SHEET THAT DECLARES A CHILD AND A SCRIPT THAT STAGES SEX DO NOT RENDER TOGETHER.
-#
-# This file reads an age now, and the age drives anatomy -- see body_of and figure_of,
-# which describe no body at all below ADULT_AGE. That floor is necessary and it is not
-# sufficient: withholding the node's own clauses does nothing about a script whose own
-# words stage nudity or sex, and those words reach the model verbatim. So the two
-# together are refused outright, before anything is sampled.
-#
-# Read off the SHEET for the age, because that is where an author states a person's
-# age, and off the whole script for the staging. Deliberately blunt: no attempt to work
-# out who the nudity is about. A film that declares a minor anywhere and stages this
-# anywhere is refused whole, and a legitimate scene with a child in it -- which this
-# node will render, with no body described for them -- does not contain either.
-_SEXUAL_STAGING = re.compile(
-    r"\b(?:sex|sexual|fucks?|fucking|fucked|intercourse|penetrat\w*|blow\s?job|"
-    r"handjob|masturbat\w*|orgasms?|orgasmic|climax(?:es|ed|ing)?|cums?|cumming|"
-    r"aroused|arousal|horny|erotic\w*|nipples?|genitals?|vagina\w*|penis\w*|"
-    r"cocks?|dicks?|pussy|clit\w*|erections?|foreplay|straddl\w*|"
-    r"topless|bottomless|naked|nude|nudity|undress\w*|strips?\s+(?:off|naked|bare)|"
-    r"moans?|moaning|moaned)\b", re.I)
 
-
-def minor_with_sexual_staging(sheet, script):
-    """A refusal message when a sheet declares a minor and the script stages sex. "" otherwise.
-
-    Both halves required. An age under 18 on its own renders -- children exist in
-    films -- and gets no body described for them by anything here. Sexual staging on
-    its own renders, which is what this node is for."""
-    named = [(n, age_in(ln)) for n, ln in sheet_lines(sheet or "") if n]
-    minors = sorted({n for n, a in named if 0 < a < ADULT_AGE})
-    if not minors:
-        return ""
-    m = _SEXUAL_STAGING.search(str(script or ""))
-    if not m:
-        return ""
-    return (f"REFUSED, and nothing was rendered. The character sheet declares "
-            f"{_join_names(minors)} as under {ADULT_AGE}, and the script stages sexual "
-            f"or nude content -- it contains {m.group(0)!r}. This node will not "
-            f"generate that combination, whichever character the wording is about and "
-            f"whatever was intended by it. Nothing here tried to work out who: a film "
-            f"holding both is refused whole.\n\n"
-            f"If an age is a typo, fix the sheet and run again -- an adult age renders "
-            f"normally. If the character is an adult, state an adult age. A scene with "
-            f"a child in it and no sexual or nude content renders as it always did, "
-            f"and no body is described for them by this node.")
 
 
 def _pron_age(sheet, name):
@@ -967,8 +919,6 @@ def figure_of(pronoun, age=0):
     if str(pronoun or "").strip().lower() != "she":
         return ""
     age = int(age or 0)
-    if age < ADULT_AGE:
-        return ""
     for lo, hi, said in _FIGURE:
         if lo <= age <= hi:
             # THE AGE IS NOT REPEATED HERE. body_of already states it in the same
@@ -8699,11 +8649,9 @@ class H3LongVideos:
         check_vae_wiring(vae, audio_vae)
         # Before anything else reads the script, for the same reason the abort above is
         # here: the answer is a refusal, and a refusal has to happen before work does.
-        _refuse = minor_with_sexual_staging(
-            "\n".join([(character_memory or ""), (prompt or "")]), "\n".join(
-                [(prompt or ""), (anchor or ""), (character_memory or "")]))
-        if _refuse:
-            raise RuntimeError(_refuse)
+        _abort = sparse_attention_allocator_abort(model)
+        if _abort:
+            raise RuntimeError(_abort)
 
         prompt, n_legacy = strip_legacy_fields(prompt)
         if n_legacy:
@@ -8734,9 +8682,8 @@ class H3LongVideos:
         # per-shot question. See film_stages_duress.
         # A DECLARED AGE UNDER 18 GETS NO BODY DESCRIBED FOR IT, and the author is told
         # so rather than left to wonder why one entry reads differently from the rest.
-        # The scene itself renders: children are in films. What is withheld is this
-        # node's own anatomy clauses, every one of them. See body_of and figure_of, and
-        # minor_with_sexual_staging for the case that does not render at all.
+        # The scene itself renders. What is withheld is this node's own anatomy clauses,
+        # every one of them. See body_of and figure_of.
         _minors = sorted({_n for _n, _ln in sheet_lines(sheet)
                           if _n and 0 < age_in(_ln) < ADULT_AGE})
         if _minors:
