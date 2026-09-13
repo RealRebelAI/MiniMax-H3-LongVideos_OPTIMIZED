@@ -120,6 +120,14 @@ class H3PromptEnhancer:
     def _apply_scenario_enhancements(self, prompt, content_type):
         """Apply scenario-specific enhancements to the prompt."""
         
+        # Enhance the actual prompt text without adding metadata that breaks continuity
+        enhanced = self._enhance_text(prompt, content_type)
+        
+        return enhanced
+
+    def _enhance_text(self, prompt, content_type):
+        """Apply scenario-specific enhancements to the prompt text."""
+        
         enhancements = {
             "child": [
                 "Add age-appropriate sensory details and emotional reactions.",
@@ -197,12 +205,13 @@ class H3PromptEnhancer:
         
         enhancements = enhancements.get(content_type, enhancements["general"])
         
-        enhanced_parts = ["Enhanced prompt based on content analysis:", ""]
-        for i, enhancement in enumerate(enhancements, 1):
-            enhanced_parts.append(f"{i}. {enhancement}")
-        enhanced_parts.append("")
-        enhanced_parts.append(prompt)
-        enhanced = "\n\n".join(enhanced_parts)
+        # Apply enhancements by expanding the prompt with more detail
+        # This enhances the actual text without breaking continuity
+        enhanced = prompt
+        
+        # Add enhancements as additional descriptive details to the prompt
+        for enhancement in enhancements:
+            enhanced = enhanced + "\n" + enhancement
         
         return enhanced
 
