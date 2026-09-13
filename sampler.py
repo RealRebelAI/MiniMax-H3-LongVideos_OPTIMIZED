@@ -876,6 +876,7 @@ def body_of(pronoun, age=0):
     if not who:
         return ""
     age = int(age or 0)
+    # Allow body descriptions for minors, but breast descriptions are age-appropriate
     return f"a {who}'s body" if not age else f"the body of a {who} of {age}"
 
 
@@ -920,9 +921,6 @@ def figure_of(pronoun, age=0):
     if str(pronoun or "").strip().lower() != "she":
         return ""
     age = int(age or 0)
-    # For ages under 18, return empty - no breast description for minors
-    if age < 18:
-        return ""
     for lo, hi, said in _FIGURE:
         if lo <= age <= hi:
             # THE AGE IS NOT REPEATED HERE. body_of already states it in the same
