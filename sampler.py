@@ -5246,10 +5246,38 @@ _FORCED_POSE = re.compile(
 # carrying the position was the picture -- and the picture is the previous shot's last
 # frame, which a close shot crops the anchor point straight out of. Text is the only
 # thing that survives a tight frame.
+# What makes a phrase describe a BODY rather than the room it is in: a limb, or a
+# word for fastening one. Every entry below requires one of these within a few
+# words of the position, because without it the table reads the set dressing --
+# "one bulb overhead" put the wrists above the head, "crates stacked to the sides"
+# put the arms out to the sides, and "her legs spread wide" moved the arms to
+# wherever the legs were. limb_anchor takes the FIRST pattern that matches, so an
+# unguarded entry does not merely add a wrong reading, it outranks the right one
+# written in the same sentence.
+_LIMB_EV = (r"\b(?:hands?|wrists?|arms?|cuffed|handcuffed|bound|tied|shackled|"
+            r"manacled|strapped|secured|fastened|locked|pinned|chained|clasped|"
+            r"held|clipped|hooked)")
+
 _LIMB_ANCHOR = (
-    (r"(?:above|over)\s+(?:her|his|their|the)\s+head|overhead|"
-     r"stretched\s+(?:up|upward)", "above the head"),
-    (r"behind\s+(?:her|his|their|the)\s+back", "behind the back"),
+    # EVERY FORM HERE CARRIES ITS OWN EVIDENCE, the same rule the "behind" entries
+    # below already follow. It did not, and bare "overhead" and "stretched up" are
+    # scenery far more often than they are limbs: "one bulb overhead", "strip lights
+    # overhead", "the cable is stretched up the wall". limb_anchor takes the FIRST
+    # pattern that matches, and this is the first, so a light fitting in the scene
+    # line beat the wrists written in the same sentence -- a woman cuffed behind her
+    # back was told, in every shot, that both arms were raised above her head.
+    # Reported as the cuffs breaking and the arms coming round to the front, which is
+    # what a model does when the pose it is given contradicts the hardware.
+    (r"(?:cuffed|handcuffed|bound|tied|shackled|manacled|strapped|secured|"
+     r"fastened|locked|pinned|chained|clipped|hooked|suspended|hoisted)\s+"
+     r"(?:\w+\s+){0,3}?(?:above|over)\s+(?:her|his|their|the)\s+head|"
+     r"(?:hands?|wrists?|arms?)\s+(?:\w+\s+){0,4}?"
+     r"(?:above|over)\s+(?:her|his|their|the)\s+head|"
+     r"(?:hands?|wrists?|arms?)\s+(?:\w+\s+){0,3}?overhead|"
+     r"(?:hands?|wrists?|arms?)\s+(?:\w+\s+){0,2}?stretched\s+(?:up|upward)",
+     "above the head"),
+    (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?behind\s+(?:her|his|their|the)\s+back",
+     "behind the back"),
     # THE SAME PLACE, WRITTEN THE WAYS PEOPLE WRITE IT. The line above needs the
     # literal word "back" after the possessive, so every one of these recorded
     # NOTHING -- and nothing here is not a smaller clause, it is pose_clause
@@ -5274,9 +5302,15 @@ _LIMB_ANCHOR = (
      r"behind\s+(?:her|his|their)\b", "behind the back"),
     (r"at\s+the\s+small\s+of\s+(?:her|his|their|the)\s+back", "behind the back"),
     (r"\b(?:hands?|wrists?|arms?)\s+behind\s+back\b", "behind the back"),
-    (r"in\s+front\s+of\s+(?:her|his|their)\s+(?:body|chest|waist)", "in front of the body"),
-    (r"(?:out\s+)?to\s+the\s+sides?|spread\s+wide", "out to the sides"),
-    (r"at\s+(?:her|his|their|the)\s+waist", "at the waist"),
+    (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?in\s+front\s+of\s+(?:her|his|their)\s+"
+     r"(?:body|chest|waist)", "in front of the body"),
+    # "Her legs spread wide" was anchoring her ARMS out to the sides, and
+    # "crates stacked to the sides" did the same from the scenery. Legs are not
+    # arms and a crate is not a limb.
+    (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?(?:(?:out\s+)?to\s+the\s+sides?|spread\s+wide)",
+     "out to the sides"),
+    (_LIMB_EV + r"\s+(?:\w+\s+){0,3}?at\s+(?:her|his|their|the)\s+waist",
+     "at the waist"),
 )
 # What they are fastened TO. Named separately because a shot can state one, the other,
 # or both, and the clause reads correctly with whichever it has.

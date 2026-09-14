@@ -3240,6 +3240,65 @@ def test_an_object_tag_leaves_with_its_object():
               ["locket"]))
 
 
+def test_scenery_does_not_move_the_wrists():
+    print("\n=== a light fitting is not a limb ===")
+    # Reported as the handcuffs breaking and the arms coming round to the front.
+    # They were not breaking. The scene line said "one bulb overhead" and the
+    # anchor table's first entry matched bare "overhead" with nothing to tie it to
+    # a body -- and limb_anchor takes the FIRST pattern that matches. So a woman
+    # written as cuffed behind her back was told, in every shot, that both arms
+    # were raised above her head. Given a pose that contradicts the hardware, the
+    # model resolves it by moving the arms, which is what was seen.
+    #
+    # Every form in that entry now carries its own evidence, which is the rule the
+    # "behind" entries already followed.
+    for _t in ("A bare concrete room, one bulb overhead. "
+               "McKenna, wrists handcuffed behind her back.",
+               "Strip lights overhead. She is cuffed behind her back.",
+               "The cable is stretched up the wall. She is cuffed behind her back."):
+        check(f"scenery does not win: {_t[:40]!r}",
+              S.limb_anchor(_t) == "behind the back")
+    # Scenery alone anchors nothing at all.
+    for _t in ("One bulb overhead. She kneels.",
+               "A lamp hangs over the table.",
+               "The rope is stretched up to the beam."):
+        check(f"no body, no anchor: {_t[:38]!r}", not S.limb_anchor(_t))
+    # ...while the limb readings it was built for still read.
+    check("a fastening participle still reads",
+          S.limb_anchor("cuffed above her head") == "above the head")
+    check("a limb still reads", S.limb_anchor("her wrists overhead") == "above the head")
+    check("stretched arms still read",
+          "above the head" in S.limb_anchor("Her arms are stretched up and locked to the rail."))
+    check("and the attachment point comes with it",
+          S.limb_anchor("handcuffed above her head to the bed frame")
+          == "above the head, at the bed frame")
+    # The pose the shot is actually given, which is what the model reads.
+    check("the pose follows the hardware",
+          "behind the body" in S.pose_clause(
+              S.limb_anchor("one bulb overhead. cuffed behind her back")))
+    # THE SAME SHAPE, EVERYWHERE ELSE IN THE TABLE. "overhead" was the one that was
+    # reported, but "to the sides", "spread wide", "at the waist", "behind her back"
+    # and "in front of her body" were all written without evidence too, and an
+    # unguarded entry does not merely add a wrong reading -- it OUTRANKS the right
+    # one written in the same sentence, because the first match wins.
+    for _t in ("Crates stacked to the sides.", "The doors spread wide.",
+               "A rope at her waist.", "The door closes behind her back.",
+               "A table in front of her body."):
+        check(f"scenery anchors nothing: {_t[:34]!r}", not S.limb_anchor(_t))
+    # Legs are not arms. This one moved the wrists to wherever the legs were.
+    check("legs do not move the wrists", not S.limb_anchor("Her legs spread wide."))
+    check("...even beside the real position",
+          S.limb_anchor("Her legs spread wide. Her wrists are cuffed at her waist.")
+          == "at the waist")
+    # ...while every position still reads when a limb or a fastening is there.
+    for _t, _want in (("Arms spread wide, chained to the wall.", "out to the sides"),
+                      ("Her wrists are cuffed at her waist.", "at the waist"),
+                      ("Her hands are cuffed in front of her body.", "in front of the body"),
+                      ("Mara is cuffed behind her back.", "behind the back")):
+        check(f"still reads {_want!r}",
+              S.limb_anchor(_t).split(", at the")[0] == _want)
+
+
 def test_fastened_limbs_keep_their_anchor():
     print("\n=== where the cuffs are held, not just that they are shut ===")
     # Reported: cuffs above the head in one shot, somewhere else in the next. The
@@ -4727,6 +4786,7 @@ def main():
     test_the_look_goes_where_the_beat_says()
     test_an_object_tag_leaves_with_its_object()
     test_fastened_limbs_keep_their_anchor()
+    test_scenery_does_not_move_the_wrists()
     test_only_a_beat_with_a_person_gets_a_mouth()
     test_a_tag_names_the_socket_it_is_wired_to()
     test_an_exit_and_a_shut_door_disagree()
