@@ -7794,21 +7794,6 @@ def upscale_video_latent(video, model_name, scale):
                        f"at their sampled size")
 
 
-def _text_encoder_model_list():
-    """Filenames in models/text_encoders, including GGUFs. Read fresh at
-    INPUT_TYPES time so newly-added encoders show up on a graph reload."""
-    try:
-        import folder_paths
-        names = set(folder_paths.get_filename_list("text_encoders"))
-        d = os.path.join(folder_paths.models_dir, "text_encoders")
-        for f in os.listdir(d):
-            if f.lower().endswith(".gguf"):
-                names.add(f)
-        return sorted(names)
-    except Exception:
-        return []
-
-
 def _latent_upscale_model_list():
     """H3 latent-upscaler weights in models/latent_upscale_models, plus 'off'.
 
@@ -8019,12 +8004,6 @@ class H3LongVideos:
                                "Nothing is rewritten. What you type is what the shot is told, "
                                "plus the scene line. Put a quoted \"line of dialogue\" in a beat "
                                "and that shot keeps its audio; beats without one are silenced."}),
-                "prompt_enhancer_model": (
-                    _text_encoder_model_list(),
-                    {"default": "Qwen3.5",
-                     "tooltip": "Text model to enhance the prompt. Uses Qwen text encoder "
-                                "from models/text_encoders. The model improves the prompt "
-                                "before it is passed to the sampler."}),
                 "resolution": (list(NATIVE_RES), {"default": "16:9",
                     "tooltip": "Aspect ratio. megapixels sets the size."}),
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
