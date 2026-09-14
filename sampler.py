@@ -7960,7 +7960,7 @@ def alignment_error(bad):
     shown = "; ".join(f"{n} = {v!r}, which is not one of {c[:3]}"
                       + ("..." if len(c) > 3 else "") for n, v, c in bad[:3])
     return (
-        "H3 Long Videos: this node's saved widget values are out of position. "
+        "H3-LongVideos: this node's saved widget values are out of position. "
         + shown + ".\n\n"
         "Widget values are restored by POSITION, with no names stored, so converting "
         "a widget to an input -- or adding or removing one -- slides every value after "
@@ -8824,7 +8824,7 @@ class H3LongVideos:
                 f"newline between them are one beat and share one shot. If those were "
                 f"meant to be separate shots, put an empty line between them")
         if not beats:
-            raise RuntimeError("H3 Long Videos: no beat to render. Every paragraph after "
+            raise RuntimeError("H3-LongVideos: no beat to render. Every paragraph after "
                                "the first is one shot; a character sheet ('Name: ...') "
                                "is folded into the scene and does not count as one.")
 
@@ -12413,7 +12413,7 @@ class H3LongVideos:
                 if not _is_oom(e):
                     raise
                 raise RuntimeError(
-                    f"H3 Long Videos: shot {i + 1} of {len(plan)} ran out of VRAM while "
+                    f"H3-LongVideos: shot {i + 1} of {len(plan)} ran out of VRAM while "
                     f"sampling. " + sampling_oom_help(w, h, fc, H3_FPS, megapixels)) from e
 
             # The video latent, for the latent upscale below. NOT used as the next
@@ -12835,5 +12835,5 @@ class H3LongVideos:
 _NODE_IDS = ("H3LongVideos", "H3LongVideosFL2VA", "H3LongVideosV1",
              "H3LongVideosREF2VA")
 NODE_CLASS_MAPPINGS = {name: H3LongVideos for name in _NODE_IDS}
-NODE_DISPLAY_NAME_MAPPINGS = {name: "H3 Long Videos" for name in _NODE_IDS}
+NODE_DISPLAY_NAME_MAPPINGS = {name: "H3-LongVideos" for name in _NODE_IDS}
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

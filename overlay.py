@@ -3,7 +3,7 @@
 # Redistribution, in whole or in part, requires written permission.
 # This notice may not be removed or altered. See LICENSE.
 """
-PIL text overlays for H3 Long Videos -- watermark and intro title.
+PIL text overlays for H3-LongVideos -- watermark and intro title.
 
 Text is COMPOSITED onto the decoded frames, never asked of the model. H3 (like
 every video diffusion model) renders text as plausible-looking letterforms that

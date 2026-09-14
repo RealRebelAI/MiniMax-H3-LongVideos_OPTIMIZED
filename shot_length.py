@@ -12,7 +12,7 @@ node or the sampler, which read the model to compute their frame counts and so
 cannot feed anything that produces the model.
 
 Wire:
-  H3 Shot Length (seconds) -> H3 Long Videos FL2VA (shot_seconds)
+  H3 Shot Length (seconds) -> H3-LongVideos FL2VA (shot_seconds)
   H3 Shot Length (frames)  -> Model Preview Override (preview_frames)
 
 One value, entered once here, drives both -- no manual re-entry, no cycle.

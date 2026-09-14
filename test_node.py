@@ -1,4 +1,4 @@
-"""Tests for H3 Long Videos.
+"""Tests for H3-LongVideos.
 
 Only what the node actually decides: how a prompt becomes shots, how a shot is
 sized, and which shots get silence or a reference. There is no prompt-rewriting

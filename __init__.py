@@ -9,7 +9,7 @@ Make long (up to ~120s) MiniMax-H3 videos from a single prompt + a single
 length, in ComfyUI.
 
 Nodes:
-  * H3 Long Videos     (sampler.py)      - one prompt -> a chain of shots with
+  * H3-LongVideos      (sampler.py)      - one prompt -> a chain of shots with
                                            synchronised audio. Your text is passed
                                            through verbatim; the node does the
                                            chaining, not the writing.

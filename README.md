@@ -44,7 +44,7 @@ Requires ComfyUI 0.31+ with native MiniMax-H3 support (tested on 0.33).
 
 ```
 UNETLoader ─┐                     images ─> Video Combine / Save Video
-CLIPLoader ─┼─> H3 Long Videos ─> audio  ─┘
+CLIPLoader ─┼─> H3-LongVideos  ─> audio  ─┘
 VAELoader ──┘                     info   ─> Show Text
 ```
 

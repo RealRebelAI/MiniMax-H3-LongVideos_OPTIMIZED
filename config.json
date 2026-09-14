@@ -8,7 +8,7 @@
     "model": "MiniMax-H3"
   },
   "nodes": [
-    "H3 Long Videos",
+    "H3-LongVideos",
     "H3 Shot Length",
     "H3 Model Inspector",
     "H3 Overlay"
