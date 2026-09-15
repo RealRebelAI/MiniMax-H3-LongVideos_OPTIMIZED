@@ -5,7 +5,6 @@
 """Audio policy shared by conditioning and soundtrack assembly."""
 
 from dataclasses import dataclass
-import re
 
 import torch
 import comfy.nested_tensor
@@ -56,10 +55,6 @@ class ShotAudio:
         free = self.lead_frames + round((self.line_seconds + self.tail_seconds) * self.latent_fps)
         tail = total - free
         return tail if tail >= round(0.5 * self.latent_fps) else 0
-
-    @property
-    def needs_silence_latent(self):
-        return self.pinned or self.lead_frames > 0 or self.tail_frames > 0
 
 
 _SILENT_UNIT = {"lat": None, "key": None}

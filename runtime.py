@@ -5,7 +5,6 @@
 """Sampling, decoding, resizing, memory handling, and frame assembly."""
 
 import math
-import sys
 
 import torch
 import nodes

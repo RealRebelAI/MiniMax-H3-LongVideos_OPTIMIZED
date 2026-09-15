@@ -135,15 +135,15 @@ def test_speech_and_refs():
 
 def test_removals():
     print("\n=== clothing removal between beats ===")
-    body, toks = S.extract_removals("Dan cuts off her jacket.\nremove: jacket")
+    body, toks, _adds = S.extract_directives("Dan cuts off her jacket.\nremove: jacket")
     check("the directive never reaches the model", "remove:" not in body)
     check("...and the beat itself is untouched", body == "Dan cuts off her jacket.")
     check("the item is captured", toks == ["jacket"])
     check("several items on one line",
-          S.extract_removals("x\nremove: coat, shirt")[1] == ["coat", "shirt"])
-    check("'off:' works too", S.extract_removals("x\noff: hat")[1] == ["hat"])
+          S.extract_directives("x\nremove: coat, shirt")[1] == ["coat", "shirt"])
+    check("'off:' works too", S.extract_directives("x\noff: hat")[1] == ["hat"])
     check("a beat with no directive is unchanged",
-          S.extract_removals("She walks in.") == ("She walks in.", []))
+          S.extract_directives("She walks in.")[:2] == ("She walks in.", []))
     sc = "A basement. Kate is 20, blonde, grey jacket, white shirt, black boots. Dan is 35."
     check("the item leaves the scene",
           "jacket" not in S.scrub_removed(sc, ["jacket"]))
@@ -264,7 +264,7 @@ def test_removals():
     # Removals accumulate: once off, a garment stays out of every later shot.
     gone = []
     for _b in ("a\nremove: jacket", "b\nremove: shirt", "c"):
-        gone.extend(t for t in S.extract_removals(_b)[1] if t not in gone)
+        gone.extend(t for t in S.extract_directives(_b)[1] if t not in gone)
     final = S.scrub_removed(sc, gone)
     check("both stay gone in a later beat",
           "jacket" not in final and "shirt" not in final and "black boots" in final)
@@ -491,7 +491,7 @@ def test_two_person_cast_has_one_body_each():
 def test_extracted_planning_policies():
     print("\n=== extracted planning policies stay aligned ===")
     quiet = S.ShotAudio(False, False, False, True, 0.5, S.AUDIO_LATENT_FPS)
-    check("a quiet shot is pinned", quiet.pinned and quiet.needs_silence_latent)
+    check("a quiet shot is pinned", quiet.pinned)
     line = S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS)
     check("dialogue gets a 20-frame lead", line.lead_frames == 20)
     # The tail mirrors the lead. 226 frames is 377 audio frames; lead 20 + a 2s line
@@ -499,7 +499,6 @@ def test_extracted_planning_policies():
     # ShotAudio the old way, and the old way has no tail.
     tail = S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS, 2.0, 2.0, 226)
     check("a short line in a long shot gets a silent tail", tail.tail_frames == 197)
-    check("...and the tail alone asks for the silence latent", tail.needs_silence_latent)
     check("a six-argument ShotAudio has no tail", line.tail_frames == 0)
     check("no margin, no tail",
           S.ShotAudio(True, True, False, True, 0.5, S.AUDIO_LATENT_FPS, 2.0, 0.0, 226).tail_frames == 0)
@@ -617,9 +616,14 @@ def test_removal_needs_a_particle():
     sc = ("A bare basement. Kate, 20, blonde, black shiny latex crop top, "
           "white cotton shorts, brown leather boots, a grey coat.")
     for _b in ("Dan cuts off her shorts.", "Dan pulls off her boots.",
-               "Dan removes her coat.", "Dan unzips her coat.",
+               "Dan removes her coat.", "Dan unzips her coat and pulls it off.",
                "Dan strips off her coat.", "Dan throws her coat away."):
         check(f"a removal still fires: {_b[:32]!r}", S.infer_removals(_b, sc))
+    # UNZIPPING IS OPENING. It used to be a removal, and the coat was scrubbed out of
+    # every later shot while it was still on her, open. It stays described, open.
+    check("unzipping alone takes nothing off", S.infer_removals("Dan unzips her coat.", sc) == [])
+    check("...it opens the coat", ("grey coat", "open") in S.engine.displaced_garments(
+        "Dan unzips her coat.", sc))
     # DOWN is not off. "Pulls down her shorts" leaves them on the body, around the
     # thighs -- reported as the shorts changing appearance in the next beat, because
     # counting it as a removal scrubbed them out of the scene and the next shot
@@ -2297,8 +2301,6 @@ def test_layers():
           S.extract_directives("x\nwear: a red coat")[2] == ["a red coat"])
     check("a beat with neither is unchanged",
           S.extract_directives("She walks in.") == ("She walks in.", [], []))
-    check("the old two-value helper still works",
-          S.extract_removals("x\nremove: hat") == ("x", ["hat"]))
     # An added layer retires when it is itself removed.
     gone, shown = ["white shirt"], ["her white shirt is now visible",
                                     "her grey vest is now visible"]

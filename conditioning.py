@@ -7,7 +7,7 @@
 import torch
 import node_helpers
 from h3_runtime import (H3_FPS, AUDIO_LATENT_FPS, _empty_av_latent, _resize, ref_image_canvas,
-                        frame_levels, apply_levels)
+                        frame_levels)
 from h3_audio import _SILENCE_STATUS, _silent_audio_latent, _pin_audio_silence
 
 
@@ -138,7 +138,7 @@ class HandoffLevels:
     def gains(self, strength):
         """(gain, offset) as 3-vectors, or (None, None) when there is nothing worth doing.
 
-        Separate from corrected() because more than one frame leaves a shot -- the handoff,
+        Separate from note() because more than one frame leaves a shot -- the handoff,
         and any face captured for a return several shots later -- and they have to carry
         the SAME grade. A recovered face arriving at a different exposure from the shot
         around it would be a new bug of exactly the kind this is fixing."""
@@ -158,15 +158,6 @@ class HandoffLevels:
         self.applied.append((gain.clone(), off.clone()))
         return (f"gain {'/'.join(f'{float(v):.3f}' for v in gain)} "
                 f"level {'/'.join(f'{float(v):+.4f}' for v in off)}")
-
-    def corrected(self, img, strength):
-        """(frame, note). The frame unchanged and an empty note until there is something
-        measured to act on -- the first boundary of every run included."""
-        gain, off = self.gains(strength)
-        if gain is None:
-            return img, ""
-        return apply_levels(img, gain, off), self.note(gain, off)
-
 
 def _keyframe_latent(vae, hand_img):
     """The keyframe latent for this shot: an ENCODE of the previous shot's last frame.

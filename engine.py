@@ -295,15 +295,21 @@ _GAP = r"(?:\s+\S+){0,4}?\s+"
 TAKES_OFF = (r"(?:takes?|took|taking|pulls?|pulled|peels?|peeled|strips?|"
              r"stripped|shrugs?|slips?|slipped|steps?|gets?|got|kicks?|"
              r"kicked)" + _GAP + r"(?:off|out\s+of)\b"
-             r"|\b(?:removes?|removed|removing|discards?|discarded|"
-             r"undresses|undressed|unbuttons?|unzips?|unzipped)")
+             r"|\b(?:removes?|removed|removing|discards?|discarded|sheds?|shedding|"
+             r"undresses|undressed)")
 PUTS_ON = (r"(?:puts?|putting|pulls?|pulled|slips?|slipped|tugs?|tugged|"
            r"steps?|stepped|climbs?|climbed|gets?|got|wriggles?)" + _GAP +
            r"(?:on|into|back\s+on)\b"
            r"|\b(?:dresses?\s+in|dressed\s+in|buttons?|zips?\s+up|fastens?)")
+# UNZIPPING A JACKET LEAVES IT ON. These were removals, so "Owen unzips his jacket"
+# took the jacket out of every later shot and called his chest bare -- and "rolls up
+# his sleeves" a beat later rolled the sleeves of a shirt that had gone with it. They
+# open a garment; a beat that also takes it off says so ("and takes it off").
 DISPLACES = (r"(?:pulls?|pulled|pushes?|pushed|tugs?|tugged|hikes?|hiked|"
              r"rolls?|rolled|lifts?|lifted|yanks?|yanked|shoves?|shoved)"
-             + _GAP + r"(?:aside|up|down|open)\b")
+             + _GAP + r"(?:aside|up|down|open)\b"
+             r"|\b(?:unzips?|unzipped|unbuttons?|unbuttoned|unfastens?|unfastened|"
+             r"undoes|undid)\b")
 
 # POSTURES and the _POSTURE list built from it used to live here. Nothing read
 # _POSTURE -- it was a second, dead copy of the posture vocabulary, and it had
@@ -501,6 +507,14 @@ _GARMENT_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
 _TAKES_OFF = _rx(r"\b" + TAKES_OFF + r"\b")
 _PUTS_ON = _rx(r"\b" + PUTS_ON + r"\b")
 _DISPLACES = _rx(r"\b" + DISPLACES + r"\b")
+# ...and the sentence can still finish the job after the garment is named. "Kate
+# unzips the denim skirt and steps out of it": the unzip opens it, the rest of the
+# sentence takes it off, and the removal verb comes after the item where the reader
+# above does not look.
+_OPENS_GARMENT = _rx(r"\b(?:unzips?|unzipped|unbuttons?|unbuttoned|unfastens?|unfastened|"
+                     r"undoes|undid|unhooks?|unhooked|unclasps?|unclasped)\b")
+_COMPLETES_OFF = _rx(r"\b(?:off|out\s+of|away|lets?\s+(?:it|them)\s+(?:fall|drop|slide)|"
+                     r"drops?\s+(?:it|them)|falls?\s+(?:to|down|away|off))\b")
 _MOVES = _rx(r"\b(?:walks?|walked|walking|goes|go|went|going|runs?|ran|running|"
              r"steps?|stepped|stepping|moves?|moved|moving|enters?|entered|"
              r"leaves?|left|leaving|crosses|crossed|crossing|climbs?|climbed|"
@@ -618,11 +632,6 @@ def nudity_in(text):
     return out
 
 
-def bare_sentence(region):
-    """How to say a region is bare, or "" for one with no wording."""
-    return next((s for _rx, r, s in _REGION_RX if r == region), "")
-
-
 def _bare_on(p, regions):
     for r in ([regions] if isinstance(regions, str) else regions):
         if r and r not in p.bare:
@@ -674,11 +683,6 @@ def _nearest_part(parts, at, ats):
             break
         return name
     return ""
-
-
-def hardware_in(text):
-    """Every piece of hardware named, as (canonical, part, as-written)."""
-    return [(c, p, w) for c, p, w, _at in hardware_spans(text)]
 
 
 def position_spans(text):
@@ -935,7 +939,7 @@ _TRAILING_VERB = (r"take[sn]?|took|taking|pull(?:s|ed|ing)?|peel(?:s|ed|ing)?|"
                   r"toss(?:es|ed)?|throw[s]?|threw|kick(?:s|ed|ing)?|"
                   r"slide[s]?|slid|wriggle[sd]?|wiggle[sd]?")
 # ...and verbs that are a removal on their own, needing no particle.
-_UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|unzip(?:s|ped)?|"
+_UNDO_VERB = (r"remove[sd]?|removing|undress(?:es|ed)?|shed(?:s|ding)?|unzip(?:s|ped)?|"
               r"unbutton(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|unfasten(?:s|ed)?|"
               # Hardware comes off by being UNDONE, and these were missing: a beat
               # saying "unlocks the belt" left it described as worn for the rest of
@@ -963,7 +967,8 @@ _DISPLACE_WAY = (r"back\s+up|back\s+down|down|up|aside|open|back|"
                  r"off\s+(?:one|her|his|their)\s+shoulders?")
 _DISPLACE = re.compile(
     r"\b(?:" + _STRIP_VERB + r"|push(?:es|ed|ing)?|shove[sd]?|roll(?:s|ed|ing)?|"
-    r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|unzip(?:s|ped)?|"
+    r"hitch(?:es|ed)?|hike[sd]?|open(?:s|ed)?|undo(?:es)?|undid|unzip(?:s|ped)?|"
+    r"unbutton(?:s|ed)?|unfasten(?:s|ed)?|unhook(?:s|ed)?|unclasp(?:s|ed)?|"
     # LIFTING A SKIRT IS DISPLACING IT, and none of these were here. Asked
     # for directly: "when the skirt has been lifted up to show the chastity
     # belt, that's when it should be shown". Lifting was not read as moving
@@ -1003,14 +1008,23 @@ def scene_name_for(head, scene):
             # a reference is pinning, so it is the worst one to describe loosely.
             item = re.sub(r"<\s*picture\s+\d+\s*>", " ", item, flags=re.I)
             item = re.sub(r"\s+", " ", item).strip()
-            if not item or item.split()[-1].lower() != head:
-                continue
-            # Drop a leading article or possessive; they are not description.
-            item = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "", item, flags=re.I)
-            # The longest entry wins: a sheet that names it twice described it most
-            # fully once, and the fuller name is the one worth carrying.
-            if len(item) > len(best):
-                best = item
+            # ONE ENTRY CAN HOLD SEVERAL GARMENTS, and the name is the garment's own
+            # part of it. "navy jacket over a white shirt" ends in "shirt", so the
+            # whole entry came back as the shirt's name and "the navy jacket over a
+            # white shirt open" was said about a shirt being unbuttoned. Split on the
+            # words that join garments, and cut a "with ..." tail, which describes a
+            # garment rather than naming it.
+            for part in re.split(r"\s+(?:over|under|beneath|underneath|on\s+top\s+of|and)\s+",
+                                 item, flags=re.I):
+                part = re.split(r"\s+with\s+", part, flags=re.I)[0].strip()
+                if not part or part.split()[-1].lower() != head:
+                    continue
+                # Drop a leading article or possessive; they are not description.
+                part = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "", part, flags=re.I)
+                # The longest entry wins: a sheet that names it twice described it
+                # most fully once, and the fuller name is the one worth carrying.
+                if len(part) > len(best):
+                    best = part
     # The author's OWN capitalisation. Lowercasing turned "PVC" into "pvc" and
     # "Shiny white crop top" into all-lowercase -- a different token sequence than
     # was written, for a brand or material name that is capitalised for a reason.
@@ -1039,6 +1053,13 @@ def displaced_garments(beat, scene):
         if not way and re.match(r"\s*(?:lift|rais|hoist|gather|bunch)", m.group(0),
                                 re.I):
             way = "up"
+        # ...and UNDOING a garment opens it. "Owen unzips his jacket" was a removal,
+        # then (once it was not) nothing at all -- the jacket went back to being
+        # described closed on the next shot, which is a jacket zipping itself up
+        # across a cut.
+        if not way and re.match(r"\s*(?:unzip|unbutton|unfasten|unhook|unclasp|undo|undid)",
+                                m.group(0), re.I):
+            way = "open"
         if not way or not thing or thing in seen:
             continue
         # The garment has to be one the scene already dresses them in, and the head
@@ -1641,6 +1662,9 @@ class SceneState:
                 actions += [(x.start(), "aside") for x in _DISPLACES.finditer(clause)
                             if x.start() <= item_at]
                 action = max(actions, default=(-1, ""))[1]
+                if action == "aside" and _OPENS_GARMENT.search(clause[:item_at]):
+                    if _COMPLETES_OFF.search(re.split(r"[.;!?]", beat[m.end():])[0]):
+                        action = "off"
                 local_who = names_in(clause, cast)
                 wearer_g = _wearer(clause, local_who, subject)
                 p = self.person(wearer_g)

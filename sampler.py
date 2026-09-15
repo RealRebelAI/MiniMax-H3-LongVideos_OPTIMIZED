@@ -49,43 +49,30 @@ PreparedVideo = _plan_module.PreparedVideo
 # Internal helper exports retained for existing callers.
 ShotAudio = _audio_module.ShotAudio
 FrameAccumulator = _runtime_module.FrameAccumulator
-frame_levels = _runtime_module.frame_levels
 apply_levels = _runtime_module.apply_levels
 H3_FPS = _runtime_module.H3_FPS
 AUDIO_LATENT_FPS = _runtime_module.AUDIO_LATENT_FPS
 KEYFRAME_SAFE_AUG = _cond_module.KEYFRAME_SAFE_AUG
-AUTO_TILE_T = _runtime_module.AUTO_TILE_T
 MAX_FRAMES = _runtime_module.MAX_FRAMES
-CANVAS_MULTIPLE = _runtime_module.CANVAS_MULTIPLE
-REF_IMAGE_SHORT_EDGE = _runtime_module.REF_IMAGE_SHORT_EDGE
 _SILENT_UNIT = _audio_module._SILENT_UNIT
 align_frame_count = _runtime_module.align_frame_count
 video_latent_t = _runtime_module.video_latent_t
 temporal_shape = _runtime_module.temporal_shape
-ref_image_canvas = _runtime_module.ref_image_canvas
-_resize = _runtime_module._resize
-_empty_av_latent = _runtime_module._empty_av_latent
-_auto_tile_t = _runtime_module._auto_tile_t
 _decode_video = _runtime_module._decode_video
 _decode_audio = _runtime_module._decode_audio
 _seamless_loop = _audio_module._seamless_loop
 mix_ambient = _audio_module.mix_ambient
 _is_oom = _runtime_module._is_oom
 _deep_cleanup = _runtime_module._deep_cleanup
-DECODE_HEADROOM = _runtime_module.DECODE_HEADROOM
-SAMPLE_HEADROOM = _runtime_module.SAMPLE_HEADROOM
 _decode_headroom = _runtime_module._decode_headroom
 _resident = _runtime_module._resident
 _image_out_dtype = _runtime_module._image_out_dtype
 _evict_all_but = _runtime_module._evict_all_but
 _SILENCE_STATUS = _audio_module._SILENCE_STATUS
-_SILENT_SECONDS = _audio_module._SILENT_SECONDS
-_SILENT_EDGE = _audio_module._SILENT_EDGE
 _silent_audio_latent = _audio_module._silent_audio_latent
 _pin_audio_silence = _audio_module._pin_audio_silence
 HandoffLevels = _cond_module.HandoffLevels
 _keyframe_latent = _cond_module._keyframe_latent
-_build_ref_images = _cond_module._build_ref_images
 _sample_on_sigmas = _runtime_module._sample_on_sigmas
 RESIZE_CHUNK = _runtime_module.RESIZE_CHUNK
 _stream_chunks = _runtime_module._stream_chunks
@@ -1070,8 +1057,10 @@ def bare_hold(regions, covers=None, worn="", gone=(), whose="", body="", figure=
             if region != _region or region in said:
                 continue
             # Something else still on the body covers this region: not bare.
-            if any(rx.search(w) for w in (worn or "").split(",")
-                   if not names_any(w, gone)):
+            # Per GARMENT, not per comma entry: "coat over a grey sweater" is one entry
+            # with the coat gone and the sweater still covering. See entry_parts.
+            if any(rx.search(t) for w in (worn or "").split(",")
+                   for _sep, t in entry_parts(w) if not names_any(t, gone)):
                 said.add(region)
                 break
             # The sheet named a layer underneath: reveal_clause has this one, and
@@ -3557,6 +3546,13 @@ _OUT_OF_VERB = (r"get(?:s|ting)?|got|shimm(?:y|ies|ied|ying)|squirm(?:s|ed|ing)?
 _PUSH_VERB = (r"push(?:es|ed|ing)?|shove[sd]?|skim(?:s|med|ming)?|ease[sd]?|"
               r"easing|roll(?:s|ed|ing)?|work(?:s|ed|ing)?")
 
+_OPENER_VERB = (r"unzip(?:s|ped)?|unbutton(?:s|ed)?|unfasten(?:s|ed)?|undo(?:es)?|undid|"
+                r"unhook(?:s|ed)?|unclasp(?:s|ed)?")
+_FINISHES_REMOVAL = re.compile(r"\b(?:off|away|out\s+of|remove[sd]?|removing|drops?|"
+                               r"dropped|discard(?:s|ed)?|sheds?|"
+                               r"lets?\s+(?:it|them)\s+(?:fall|drop|slide)|"
+                               r"falls?\s+(?:to|down|away|off))\b", re.I)
+
 _REMOVAL_PROSE = re.compile(
     r"\b(?:" + _UNDO_VERB + r")\b"
     # "down" is NOT here. Pulling a garment down leaves it ON, around the thighs or
@@ -5113,7 +5109,7 @@ def restraint_sentence(item, wearers, described, anchor="", rigid=False, posed=F
     elif rigid:
         out += (f", {'their' if plural else 'its'} links keeping their size and the run "
                 f"between them taut")
-    out += f", the same object in the same material."
+    out += ", the same object in the same material."
     if who:
         out += " Everyone else in the shot has on exactly what their own entry lists."
     return out
@@ -5146,8 +5142,8 @@ def own_body(clause, who, described):
     body = re.sub(r"^The\s+", f"{subject}'s ", body)
     body = re.sub(r"^Everything worn\b", f"Everything {subject} is wearing", body)
     return (" " + body
-            + f" Everyone else in the shot keeps on exactly what their own entry "
-              f"lists.")
+            + " Everyone else in the shot keeps on exactly what their own entry "
+              "lists.")
 
 
 def own_hold(hold, wearers, described):
@@ -6653,10 +6649,32 @@ def first_place(text):
     return ""
 
 
+# A PLACE SOMEBODY LOOKS AT IS NOT A PLACE THEY ARE IN. "Maya looks out of the window
+# at the garden" matched "at the garden" and put the shot in the garden: "This shot
+# takes place in the garden: the walls, floor, light and furniture are the garden's
+# throughout", a fresh start with the kitchen thrown away, and the garden latched --
+# "Maya pours tea." two shots later was still in it. A kitchen that turns into a
+# garden because somebody glanced out of its window is the set not staying the same.
+#
+# Read off the verb the preposition hangs on, with at most a particle and one "out of
+# the window"-shaped phrase between them. "Watches TV at the bar" and "sits in the
+# garden" have a different verb, or an object in between, and still place somebody.
+_AIMED_AT = re.compile(
+    r"\b(?:look|stare|glance|gaze|peer|point|gestur|wave|nod|shout|call|yell|squint|"
+    r"glare|beckon|aim)\w*"
+    r"(?:\s+(?:out|over|up|down|back|across|around|round|through|away|off|in))*"
+    r"(?:\s+(?:of|through|from|across|over)\s+(?:the|a|an|her|his|their)\s+[\w-]+"
+    r"(?:\s+[\w-]+)?)?\s*$", re.I)
+
+
 def place_named(text):
     """The place this text says somebody is IN, without travelling. "" if none."""
-    m = _IS_IN.search(str(text or ""))
-    return re.sub(r"\s+", " ", m.group(1)).strip().lower() if m else ""
+    text = str(text or "")
+    for m in _IS_IN.finditer(text):
+        if _AIMED_AT.search(text[:m.start()]):
+            continue
+        return re.sub(r"\s+", " ", m.group(1)).strip().lower()
+    return ""
 
 
 def rooms_named(text):
@@ -6900,7 +6918,6 @@ def exits_vehicle(text):
     return bool(_EXIT_VEHICLE.search(text or ""))
 
 
-_PICTURE_TAG = re.compile(r"<\s*picture[\s_\-]*(\d+)\s*>", re.I)
 
 
 def renumber_reference_tags(text, wired):
@@ -6983,6 +7000,21 @@ def room_claim(n, present, joining):
     if joining:
         said += (f" {' and '.join(joining)} {'are' if len(joining) > 1 else 'is'} in "
                  f"this room too, already in place at the first frame.")
+    return said
+
+
+def returning_room_claim(n, room, present, arriving):
+    """Claim a frame of a room the film showed before and has come back to.
+
+    Its own claim, not room_claim's: that one says "a moment earlier", and this
+    picture is from shots ago. It names who is in it, because an unclaimed person
+    in a picture is another person."""
+    said = (f" <Picture {n}> is the {room} as the film last showed it"
+            f"{', where this shot arrives' if arriving else ''}: the same walls, floor, "
+            f"furniture and light.")
+    if present:
+        said += (f" {_join_names(present)} "
+                 f"{'are the people' if len(present) > 1 else 'is the person'} in it.")
     return said
 
 
@@ -7190,10 +7222,9 @@ _ENTRY_END = re.compile(r"^\s*(?:[,;.!?]|$|(?:and|over|under|beneath|above|with|
 # Hardware, not clothing. Inference never takes a restraint off: the standing rule is
 # that once one goes on it stays on, and an explicit `remove:` is the only thing that
 # clears it. A beat that cuts a rope must not silently unlock the cuffs as well.
-_RESTRAINT_WORD = re.compile(
-    r"^(?:handcuffs?|cuffs?|shackles?|manacles?|chains?|ropes?|cords?|straps?|"
-    r"collars?|gags?|blindfolds?|restraints?|bindings?|tape|ties?|harness|"
-    r"straitjacket|spreader|hogtie|clamps?|clips?)$", re.I)
+# One definition, in the engine, where it is called _NOT_CLOTHING. Two copies of a
+# vocabulary drift apart, which this file has recorded more than once.
+_RESTRAINT_WORD = engine._NOT_CLOTHING
 
 
 # A <Picture N> immediately after a word, so the entry-end test can look past an
@@ -7358,6 +7389,23 @@ def _sentence_before(beat, at):
     return beat[cut:at]
 
 
+# Garments people call by each other's names. Families, not synonyms: a beat saying
+# "shoes" means whatever is on her feet, and the sheet's word is the one to act on.
+_GARMENT_FAMILIES = (
+    ("shoes", "boots", "sneakers", "trainers", "heels", "sandals", "loafers", "slippers",
+     "flats", "pumps", "clogs", "brogues", "moccasins", "espadrilles", "wedges"),
+    ("sweater", "jumper", "sweatshirt", "hoodie", "pullover", "cardigan"),
+    ("coat", "jacket", "parka", "blazer", "overcoat", "raincoat", "anorak", "windbreaker",
+     "peacoat"),
+    ("top", "shirt", "blouse", "tee", "t-shirt", "tshirt", "camisole"),
+    ("trousers", "pants", "jeans", "slacks", "chinos", "joggers", "sweatpants"),
+    ("hat", "cap", "beanie", "beret"),
+    ("gloves", "mittens"),
+)
+_GARMENT_KIN = {word: tuple(w for w in family if w != word)
+                for family in _GARMENT_FAMILIES for word in family}
+
+
 def infer_removals(beat, scene):
     """Garments this beat takes off, read from its own prose. [] when none.
 
@@ -7376,6 +7424,14 @@ def infer_removals(beat, scene):
         # Asked for is not done. See _in_a_request.
         if _in_a_request(beat, m.start()):
             continue
+        # OPENING IS NOT TAKING OFF. "unzips his jacket" leaves the jacket on, and read
+        # as a removal it was scrubbed from every later shot with the chest called bare.
+        # Unless the same sentence finishes the job ("unzips her jacket and takes it
+        # off"), or what is being undone is hardware, which comes off by being undone.
+        if re.fullmatch(_OPENER_VERB, m.group(0), re.I):
+            _rest = re.split(r"[.;!?]", beat[m.end():])[0]
+            if not (_FINISHES_REMOVAL.search(_rest) or restraint_present(_rest)):
+                continue
         _before = len(found)
         tail = beat[m.end():]
         cut = _OBJECT_END.search(tail)
@@ -7417,7 +7473,16 @@ def infer_removals(beat, scene):
             # It has to be worn: the HEAD of something the scene lists, not a
             # modifier inside it and not half of a hyphenated compound.
             if not _is_entry_head(low, scene):
-                continue
+                # ...OR THE ONE THING IT CAN MEAN. "takes off her shoes" beside a sheet
+                # saying "brown leather boots" named nothing the sheet lists, so the
+                # boots stayed described as on while the beat took them off: the shot
+                # drew them half-removed and the next one put them back. People call a
+                # garment by its family's everyday word. Only when exactly one member of
+                # that family is on the sheet -- two candidates is a guess.
+                _kin = [k for k in _GARMENT_KIN.get(low, ()) if _is_entry_head(k, scene)]
+                if len(_kin) != 1 or _kin[0] in found:
+                    continue
+                low = _kin[0]
             # "her jeans shorts" is ONE garment. "jeans" there is a modifier, but it
             # is also the head of Dan's own entry, so it matched his line and took
             # HIS trousers off in a beat that never mentions him -- and they stayed
@@ -7504,8 +7569,14 @@ _NAKED_CUE = re.compile(
     r"\bnaked\b(?!\s+(?:eye|flame))"
     r"|\bnude\b|\bin\s+the\s+nude\b"
     r"|\bundress(?:es|ed|ing)?\b"
-    r"|\bstrips?\s+(?:out\s+of|off|down|naked|bare)\b|\bstripp(?:ed|ing)\s+"
-    r"(?:out\s+of|off|down|naked|bare)\b"
+    # "strips off" and "strips out of" only when nothing specific follows. "She strips
+    # off her coat" named a coat and read as naked: coat, sweater, jeans and boots all
+    # came off, and the next shot called her bare. A named garment is handled as that
+    # garment; "strips off." and "strips off her clothes" still undress.
+    r"|\bstrips?\s+(?:down|naked|bare)\b|\bstripp(?:ed|ing)\s+(?:down|naked|bare)\b"
+    r"|\b(?:strips?|stripp(?:ed|ing))\s+(?:out\s+of|off)\b"
+    r"(?=\s*(?:[.,;!?]|$)|\s+(?:and|then|while|as)\b|\s+(?:everything|it\s+all|all\s+of\s+it)\b"
+    r"|\s+(?:(?:his|her|their|all\s+(?:his|her|their))\s+)?(?:clothes|clothing|garments|things|kit|outfit|gear)\b)"
     r"|\btakes?\s+(?:everything|it\s+all|all\s+of\s+it|the\s+lot)\s+off\b"
     # A GENERIC garment word as the object. "Sam takes off his clothes" is the
     # commonest way anybody writes this, and it named no garment the sheet lists,
@@ -7632,12 +7703,6 @@ def extract_directives(beat):
     return re.sub(r"\n{2,}", "\n", body).strip(), removed, added
 
 
-def extract_removals(beat):
-    """Back-compatible shim: (body, removed tokens)."""
-    body, removed, _ = extract_directives(beat)
-    return body, removed
-
-
 # What makes a garment-less fragment read as CONTINUING the item before it. A
 # print cue, a quoted span, a pronoun pointing back, a fragment that opens with
 # the preposition that would have followed the noun -- or a capitalised word
@@ -7686,7 +7751,7 @@ def hide_item(text, items):
         frags, kept = line.split(","), []
         trailing = False        # the unit just before this one went with its garment
         entry = ":" in line     # a labelled sheet entry: where attribute lists live
-        for n, frag in enumerate(frags):
+        for frag in frags:
             # A UNIT IS A SENTENCE, not only a comma-fragment. A fragment holding
             # "denim shorts. She wears a black thong. BRAT is printed across the
             # back." kept all of it because the shorts were still in it, and
@@ -7795,6 +7860,50 @@ def strippers_in(beat, sheet):
     return out
 
 
+# ONE LIST ENTRY, SEVERAL GARMENTS. A sheet lists what somebody wears between commas,
+# and an entry often holds more than one thing: "long red coat over a grey sweater",
+# "a white shirt under a navy jacket", "a grey coat and black boots". Taking off the
+# coat dropped the whole entry, so the sweater went with it -- and the removal shot
+# then called her chest bare, because nothing left in the text covered it. One layer
+# of clothing described three ways across one cut: on, gone, and skin.
+#
+# ...and ONE GARMENT, SEVERAL WORDS. "a denim jacket with rolled sleeves and a hood"
+# split on its "and" left "a hood" behind when the jacket came off -- a hood with no
+# garment under it. An "and" inside a "with" phrase joins parts of the SAME garment,
+# unless what follows is a garment of its own ("a grey coat with a fur collar and black
+# boots" is still two things).
+_ENTRY_SEP = re.compile(r"(\s+(?:over|under|beneath|underneath|on\s+top\s+of|and)\s+)", re.I)
+_LAYER_SEP = re.compile(r"^\s+(?:over|under|beneath|underneath|on\s+top\s+of)\s+$", re.I)
+_GARMENT_PART = {"sleeve", "sleeves", "hood", "collar", "lapel", "lapels", "pocket",
+                 "pockets", "button", "buttons", "zip", "zipper", "lining", "trim",
+                 "fringe", "laces", "hem", "neckline", "print", "logo", "stripes",
+                 "pattern", "cuffs", "cuff", "straps", "strap", "buckle", "badge"}
+
+
+def entry_parts(frag):
+    """[(separator before it, text)] -- the garments one comma entry names, in order."""
+    bits = _ENTRY_SEP.split(frag or "")
+    parts = [("", bits[0])]
+    for i in range(1, len(bits) - 1, 2):
+        sep, text = bits[i], bits[i + 1]
+        head = (re.findall(r"[a-z]+", text.lower()) or [""])[-1]
+        joins_with = (not _LAYER_SEP.match(sep) and re.search(r"\bwith\b", parts[-1][1], re.I)
+                      and head in _GARMENT_PART)
+        if joins_with:
+            parts[-1] = (parts[-1][0], parts[-1][1] + sep + text)
+        else:
+            parts.append((sep, text))
+    return parts
+
+
+def join_entry_parts(parts):
+    """The entry again from the parts kept, the first one losing its separator."""
+    out = ""
+    for i, (sep, text) in enumerate(parts):
+        out += (text if i == 0 else sep + text)
+    return out.strip()
+
+
 def scrub_removed(text, tokens):
     """Drop the parts of `text` that name a removed item.
 
@@ -7846,9 +7955,12 @@ def scrub_removed(text, tokens):
                 # and black boots". Dropping it whole takes the innocent one with
                 # it, and an undescribed garment is one the model re-invents. So
                 # drop only the side that names the removed item.
-                sides = re.split(r"\s+\band\b\s+", frag, flags=re.I)
-                gone = [s for s in sides if any(p.search(s) for p in pats)]
-                keep = [s for s in sides if s not in gone] if len(sides) > 1 else []
+                # ...and "over"/"under" join layers the same way. See entry_parts.
+                _parts = entry_parts(frag)
+                gone = [t for _sep, t in _parts if any(p.search(t) for p in pats)]
+                _kept_parts = ([(sep, t) for sep, t in _parts if t not in gone]
+                               if len(_parts) > 1 else [])
+                keep = [join_entry_parts(_kept_parts)] if _kept_parts else []
                 # A PERSON's tag must not leave with a garment that happened to share
                 # its fragment -- losing it costs that shot its identity reference.
                 # An OBJECT's tag is the opposite case: "a silver locket <Picture 2>"
@@ -9112,7 +9224,6 @@ class H3LongVideos:
         paced_shots = []          # shots told to spread their action
         staging_shots = set()     # shots that MOVE a garment on screen
         bared_shots = []          # ...and shots that uncover skin
-        bare_held = []            # ...and shots told a region is STILL bare
         crowded = []              # (shot, clauses dropped for room)
         absent_hold = []          # shots where the wearer is not on screen
         exposed_by_beat = []      # (shot, garments the beat names while covered)
@@ -9152,6 +9263,8 @@ class H3LongVideos:
         muted_sound = []            # shots whose written sound was given up for it
         stripped_shots = set()      # 0-based shots that took something off
         cut_shots = set()           # 0-based shots opening in a room the keyframe is not in
+        shot_rooms = {}             # 0-based shot -> (room it opens in, room it ends in)
+        hardware_changed = set()    # 1-based shots that put hardware on or take it off
         _undescribed = []           # rooms the film enters that the prompt never describes
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
@@ -9297,6 +9410,8 @@ class H3LongVideos:
                     _state.declare(_n, _line, staged_later=_later_for_state)
             _ch = _state.read(body, cast=[n for n, _ in sheet_lines(sheet) if n],
                               shot=len(plan) + 1)
+            if _ch.get("applied") or _ch.get("released"):
+                hardware_changed.add(len(plan) + 1)
             # Who this beat involves, decided BEFORE the removals: a beat that
             # undresses somebody names no garment, so the wardrobe to clear is read
             # off their sheet entries -- and only theirs. Undressing one person must
@@ -9533,6 +9648,23 @@ class H3LongVideos:
                              f"scene still describes {', '.join(maybe)} and there is no "
                              f"'remove:' line for it -- so every shot keeps saying it is worn. "
                              f"Add 'remove: {maybe[0]}' to that beat")
+            # PUT BACK ON, IN PROSE. "Maya puts her coat back on" was read as nothing:
+            # the removal had scrubbed the coat, and only an `add:` line brought a
+            # garment back -- so from that beat on she was put in a coat on screen and
+            # described without one, and the coat was whatever the model made of it.
+            # A garment that came off earlier and that this beat puts on is the same
+            # thing an `add:` says, under the sheet's own name for it.
+            if auto_remove and gone:
+                for _g in list(gone):
+                    if _g in restored or any(names_any(a, [_g]) for a in (adds or [])):
+                        continue
+                    _head = str(_g).lower().split()[-1]
+                    if not (names_any(body, [_head]) and beat_stages_wearing(body, _head)):
+                        continue
+                    _name = scene_name_for(_head, sheet or scene) or _g
+                    adds = list(adds or []) + [_name]
+                    notes.append(f"shot {len(plan) + 1}: read '{_name}' as put back on, "
+                                 f"the way an 'add:' line would say it")
             _wearing = ""             # the both-ends clause for a garment going on
             _staged_add = []          # ...and the phrases it covers, held out of
                                       #    this shot's static wardrobe
@@ -9768,8 +9900,6 @@ class H3LongVideos:
                               body=body_of(*_pron_age(shot_sheet, _n)),
                               figure=figure_of(*_pron_age(shot_sheet, _n)))
                     for _n, _rg, _on in _rows)
-                if _bare:
-                    bare_held.append(len(plan) + 1)
             if _bare:
                 bared_shots.append(len(plan) + 1)
             # Terminated, or the last sheet line welds onto the beat -- "grey coat
@@ -9933,8 +10063,28 @@ class H3LongVideos:
             # that made it appear at the first frame. It joins the static wardrobe
             # from the NEXT shot on, exactly as a removal scrubs from its own.
             live = [a for a in shown if a not in _staged_add]
-            if live:
-                tail = ". ".join(a.rstrip(".") for a in live) + "."
+            # ...ON SOMEBODY. A garment put back went in as a sentence of its own --
+            # "A hallway. Long red coat. Maya opens the front door." -- a coat in the
+            # room with nobody in it, which a model is free to hang on a hook or on
+            # the wrong person. When one sheet entry is the garment's owner it is said
+            # on them, and in a shot they are not in it is not said at all. With no
+            # clear owner it stays the sentence it was.
+            _here_names = {n for n, _ in sheet_lines(shot_sheet or "") if n}
+            _said = []
+            for a in live:
+                _head = (re.findall(r"[a-z]+", a.lower()) or [""])[-1]
+                _owners = [n for n, ln in sheet_lines(sheet or "")
+                           if n and _head and names_any(ln.split(":", 1)[-1], [_head])]
+                if len(_owners) == 1 and _here_names:
+                    if _owners[0] not in _here_names:
+                        continue
+                    _bare_name = re.sub(r"^(?:a|an|the|her|his|their|its)\s+", "",
+                                        a.strip().rstrip("."), flags=re.I)
+                    _said.append(f"{_owners[0]} is wearing the {_bare_name}")
+                else:
+                    _said.append(a.rstrip("."))
+            if _said:
+                tail = ". ".join(_said) + "."
                 tail = tail[0].upper() + tail[1:]
                 shot_scene = f"{shot_scene} {tail}".strip() if shot_scene else tail
             # The removal has to FINISH inside this shot, because its last frame is
@@ -10108,8 +10258,6 @@ class H3LongVideos:
             # genuinely already on, the sheet check is doing its job, and
             # overriding it there cost the cuffs their standing hold. The veto is
             # lifted only where this node created the conflict.
-            _stages_now = any(at == len(plan) + 1 and canon in _sheet_hw
-                              for canon, at in _staged_at.items())
             _applying = bool(restrained and not _was_restrained
                              and not restraint_present(_scene_before_now)
                              and restraint_going_on(body))
@@ -10209,6 +10357,7 @@ class H3LongVideos:
             _opens_in = _frm or (_room_before if _travel else here)
             if (len(plan) and _opens_in and _room_before and _opens_in != _room_before):
                 cut_shots.add(len(plan))
+            shot_rooms[len(plan)] = (_opens_in or "", here or "")
             if here and here not in _described_rooms and here not in _undescribed:
                 _undescribed.append(here)
             # ...and say so on later shots, because the scene paragraph still
@@ -11779,37 +11928,37 @@ class H3LongVideos:
         # the author needs to know when it decided nothing.
         if _film_mood == "grim":
             notes.append(
-                f"the anchor declares the film's tone, so every shot carries \"The mood "
-                f"is grim.\" and no guessing is done. That is the reliable way to set "
-                f"it: swept over 512 beats, inferring a mood from the beats alone "
-                f"called an ORDINARY film grim as often as a duress one, because the "
-                f"words overlap -- screams is a waterslide, tied is a boat, bound is a "
-                f"flight to Lisbon, chained is a desk job")
+                "the anchor declares the film's tone, so every shot carries \"The mood "
+                "is grim.\" and no guessing is done. That is the reliable way to set "
+                "it: swept over 512 beats, inferring a mood from the beats alone "
+                "called an ORDINARY film grim as often as a duress one, because the "
+                "words overlap -- screams is a waterslide, tied is a boat, bound is a "
+                "flight to Lisbon, chained is a desk job")
         elif _film_mood == "light":
             notes.append(
-                f"the anchor declares a light tone, so no grim mood is applied to any "
-                f"shot whatever the beats say. That is the override for a wrong "
-                f"reading, and it wins outright")
+                "the anchor declares a light tone, so no grim mood is applied to any "
+                "shot whatever the beats say. That is the override for a wrong "
+                "reading, and it wins outright")
         elif _film_duress:
             notes.append(
-                f"no tone is declared in the anchor, and the beats or the character "
-                f"sheet carry UNAMBIGUOUS duress -- hardware on a body, a captor, an "
-                f"abduction, being locked in -- so every shot carries \"The mood is "
-                f"grim.\" Only unambiguous evidence counts here: ordinary coercion "
-                f"verbs and distress words are not enough on their own, because "
-                f"grabbing, dragging and screaming are as much a garden centre and a "
-                f"waterslide as an abduction. Write the tone into the anchor to settle "
-                f"it either way")
+                "no tone is declared in the anchor, and the beats or the character "
+                "sheet carry UNAMBIGUOUS duress -- hardware on a body, a captor, an "
+                "abduction, being locked in -- so every shot carries \"The mood is "
+                "grim.\" Only unambiguous evidence counts here: ordinary coercion "
+                "verbs and distress words are not enough on their own, because "
+                "grabbing, dragging and screaming are as much a garden centre and a "
+                "waterslide as an abduction. Write the tone into the anchor to settle "
+                "it either way")
         elif any(beat_duress_strength(b) for b in beats):
             notes.append(
-                f"some beats read as though they MIGHT stage duress -- coercion or "
-                f"distress verbs -- but nothing unambiguous, so no mood was applied and "
-                f"every face is left to the model, whose prior for a described person "
-                f"is a pleasant posed portrait. If this film has a tone, write it into "
-                f"the anchor: 'grim', 'tense', 'a kidnapping' and the like turn it on "
-                f"for every shot, and 'warm' or 'comic' turn it off for good. Measured "
-                f"over 512 beats, guessing from the beats alone is no better than a "
-                f"coin toss, so it does not guess")
+                "some beats read as though they MIGHT stage duress -- coercion or "
+                "distress verbs -- but nothing unambiguous, so no mood was applied and "
+                "every face is left to the model, whose prior for a described person "
+                "is a pleasant posed portrait. If this film has a tone, write it into "
+                "the anchor: 'grim', 'tense', 'a kidnapping' and the like turn it on "
+                "for every shot, and 'warm' or 'comic' turn it off for good. Measured "
+                "over 512 beats, guessing from the beats alone is no better than a "
+                "coin toss, so it does not guess")
         if vocal_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in vocal_shots)} have a vocal that "
@@ -12109,18 +12258,18 @@ class H3LongVideos:
             _wardrobes = [f"{n} ({', '.join(garments_in(ln)[:3])})"
                           for n, ln in sheet_lines(sheet) if n and garments_in(ln)]
             notes.append(
-                f"character_guard is OFF, so EVERY sheet line is in EVERY shot -- "
-                f"including the wardrobe of everyone the beat does not involve. "
+                "character_guard is OFF, so EVERY sheet line is in EVERY shot -- "
+                "including the wardrobe of everyone the beat does not involve. "
                 + ("With " + "; ".join(_wardrobes[:4]) + ", " if _wardrobes else "")
-                + f"a shot about one person is also describing what the others have on, "
-                f"and at cfg 1 the model reads the prompt as a bag of words before it "
-                f"reads a label: a garment listed for one character lands on whichever "
-                f"body is in frame. Reported as boys wearing stockings. Measured: with "
-                f"the guard ON, a shot that names only the men carries no word of the "
-                f"women's clothing at all, because only the people a beat involves are "
-                f"described. Turn it on. For extras nobody has an entry for, write them "
-                f"into the beat instead -- your words reach the model verbatim and an "
-                f"unnamed person needs no entry, though a removal cannot be held for one")
+                + "a shot about one person is also describing what the others have on, "
+                "and at cfg 1 the model reads the prompt as a bag of words before it "
+                "reads a label: a garment listed for one character lands on whichever "
+                "body is in frame. Reported as boys wearing stockings. Measured: with "
+                "the guard ON, a shot that names only the men carries no word of the "
+                "women's clothing at all, because only the people a beat involves are "
+                "described. Turn it on. For extras nobody has an entry for, write them "
+                "into the beat instead -- your words reach the model verbatim and an "
+                "unnamed person needs no entry, though a removal cannot be held for one")
         if refs_all and _tagged and not character_guard:
             notes.append(
                 f"character_guard is OFF and {len(refs_all)} reference image(s) are tagged -- "
@@ -12240,12 +12389,12 @@ class H3LongVideos:
                 f"finishes the audio"
                 + (f" -- '{_alt_sched[0]}' leaves {_alt_sched[1]:.3f}" if _alt_sched
                    else "")
-                + f" is still the better fix and costs no step; this one fires only "
-                f"while the tail is steep. It lands at 0.030 whatever shift_audio is "
-                f"set to -- 1, 3 and 5 all end up there -- so shift_audio does NOT "
-                f"need tuning by hand for this any more, and the older advice to "
-                f"lower it does not apply while this is on. Off by wiring your own "
-                f"`sigmas`, or with apply_model_sampling")
+                + " is still the better fix and costs no step; this one fires only "
+                "while the tail is steep. It lands at 0.030 whatever shift_audio is "
+                "set to -- 1, 3 and 5 all end up there -- so shift_audio does NOT "
+                "need tuning by hand for this any more, and the older advice to "
+                "lower it does not apply while this is on. Off by wiring your own "
+                "`sigmas`, or with apply_model_sampling")
         # ...and NOT where the landing has already dealt with it. Both notes fired
         # together at the shipped defaults and the second was false the moment the
         # first was true: it said the branch "still has sigma 0.43 to clear on its
@@ -12339,6 +12488,7 @@ class H3LongVideos:
             sigmas=sigmas, silence_nonspeech=silence_nonspeech,
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
+            shot_rooms=shot_rooms, hardware_changed=hardware_changed,
             tiled_decode=tiled_decode, trim_seam=trim_seam,
             upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
@@ -12351,6 +12501,8 @@ class H3LongVideos:
         _returns = prepared._returns
         _soft_landing = prepared._soft_landing
         _tagged_names = prepared._tagged_names
+        shot_rooms = prepared.shot_rooms or {}
+        hardware_changed = prepared.hardware_changed or set()
         ambient_audio = prepared.ambient_audio
         ambient_level = prepared.ambient_level
         apply_model_sampling = prepared.apply_model_sampling
@@ -12434,9 +12586,11 @@ class H3LongVideos:
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
         _recovered = []             # (shot, name, source shot) actually pinned
+        _room_frames = {}           # room -> [(last frame there, who was in it, wardrobe generation, shot)], newest first
+        _room_returns = []          # (shot, room, source shot) actually carried
+        _wardrobe_gen = 0           # bumped by every shot that changes what anybody wears or is held by
         _handoff_claimed = []       # shots whose demoted handoff was named in the text
         _untrimmed = []             # shots that opened on no keyframe, so kept frame one
-        fresh_room = []             # shots cut because they open in another room
         _plate_on = 0               # the shot whose first_frame rides as the SET
         _carried = []               # (shot, who was there, who joins) room carried on
         shot_detail = []            # (detail, contrast) per shot, on its last frame
@@ -12473,7 +12627,6 @@ class H3LongVideos:
             # room has changed. See cut_shots.
             elif i in cut_shots:
                 shot_handoff = None
-                fresh_room.append(i + 1)
             # SHOT 1'S first_frame, READ AS THE SET. Same answer as the branch below
             # and for the same reason -- a keyframe is a picture, and the people the
             # beat places are not in this one -- reached separately because shot 1 has
@@ -12572,6 +12725,47 @@ class H3LongVideos:
             # other and has to be claimed or it reads as a second person. Decided
             # here rather than inside build_conditioning because the claim is text,
             # and the text is assembled up here.
+            # A ROOM THE FILM COMES BACK TO, WITH NO PICTURE OF IT.
+            #
+            # A cut to a room opens fresh, and a walk into one opens on the room being
+            # left -- either way nothing pictorial says what the room looked like the
+            # last time it was on screen, so the sentence rebuilds it and the rebuild is
+            # a different room: the living room on shot 3 is not the living room of
+            # shot 1. Reported as locations and interiors not staying the same. The node
+            # rendered that room already; its last frame there is the picture.
+            #
+            # Carried only when it cannot bring anything else back with it. A frame is
+            # a picture of everyone in it, so everybody in it has to be named in this
+            # shot (and none of them carry a portrait of their own -- a second picture
+            # of one person is how a second one gets drawn). And a frame taken before
+            # anybody changed clothes or hardware is a picture of the old wardrobe,
+            # which a reference would put back: any such change since retires it.
+            _opens, _ends = shot_rooms.get(i, ("", ""))
+            _prev_end = shot_rooms.get(i - 1, ("", ""))[1] if i else ""
+            _back, _arriving = "", False
+            if i in cut_shots and _opens in _room_frames:
+                _back = _opens
+            elif _ends and _ends != _prev_end and _ends != _opens and _ends in _room_frames:
+                _back, _arriving = _ends, True
+            if _back:
+                _cast_now = set(plan.shots[i].cast)
+                # ...and, on a WALK in, nobody who is also in the keyframe. A walk keeps
+                # the keyframe -- the room being left, with whoever is leaving it -- so a
+                # frame of the arrival room with the same person in it is a second
+                # picture of her, which is how a second one gets drawn. A cut drops the
+                # keyframe, so there the frame is the only picture and needs no such test.
+                _in_keyframe = (set(plan.shots[i - 1].cast)
+                                if (_arriving and i and shot_handoff is not None) else set())
+                for _frame, _in_it, _gen, _from in _room_frames[_back]:
+                    if (_gen == _wardrobe_gen
+                            and all(n in _cast_now for n in _in_it)
+                            and not any(n in _tagged_names for n in _in_it)
+                            and not any(n in _in_keyframe for n in _in_it)):
+                        _extra.append(_frame)
+                        shot_prompt = shot_prompt + returning_room_claim(
+                            len(shot.refs) + len(_extra), _back, _in_it, _arriving)
+                        _room_returns.append((i + 1, _back, _from))
+                        break
             _shot_refs = list(shot.refs) + _extra
             if _handoff_ref and _plate_on == i + 1:
                 # A SET, not a room a moment earlier. See plate_claim.
@@ -12686,13 +12880,12 @@ class H3LongVideos:
             # viewer sees are the ones the model made. Everything that leaves this shot for
             # a later one comes off hand_src, so the handoff and any captured face take the
             # same grade from the same call.
-            _lv_note = ""
             try:
                 if hold_levels > 0 and hand_src is not None and hand_src.shape[0]:
                     _lg, _lo = _levels.gains(hold_levels)
                     if _lg is not None:
                         hand_src = apply_levels(hand_src, _lg, _lo)
-                        _lv_note = _levels.note(_lg, _lo)
+                        _levels.note(_lg, _lo)   # recorded for the end-of-run report
             except Exception:
                 pass
             # Clamp before it becomes a keyframe. A decode can land slightly outside
@@ -12745,6 +12938,24 @@ class H3LongVideos:
                         _captured_from[_who] = i + 1
             except Exception:
                 pass                       # a recovered frame is a nicety, not the render
+            # The room this shot ENDS in, from its last frame -- the end, because a
+            # walk is in the room it arrives in by then. From an ordinary shot only,
+            # like the face above, and with hardware counted as wardrobe: a picture
+            # from before the cuffs went on would take them off again.
+            if not _wardrobe_normal or _n in hardware_changed:
+                _wardrobe_gen += 1
+            else:
+                _room_end = shot_rooms.get(i, ("", ""))[1]
+                try:
+                    if _room_end and hand_src.shape[0]:
+                        # A few per room, newest first, so a walk back can find one
+                        # without the person walking. Three bounds the memory.
+                        _room_frames[_room_end] = ([(
+                            hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True),
+                            [n for n in plan.shots[i].cast if n], _wardrobe_gen, i + 1)]
+                            + _room_frames.get(_room_end, []))[:3]
+                except Exception:
+                    pass                   # a carried room is a nicety, not the render
             del hand_src
             # TRIM ONLY WHERE THERE WAS A KEYFRAME TO DUPLICATE.
             #
@@ -12836,6 +13047,16 @@ class H3LongVideos:
                 f"appearing on the later shots because those are the ones with both a "
                 f"handoff and a reference. Raising ref_noise_aug to {KEYFRAME_SAFE_AUG:g} "
                 f"or above keeps the handoff a keyframe and the question does not arise")
+        if _room_returns:
+            notes.append(
+                "carried a room back: "
+                + "; ".join(f"the {room} on shot {n}, from shot {src}"
+                            for n, room, src in _room_returns)
+                + ". The film returns to a room it already showed, and without a picture "
+                  "the words rebuild it as a different room. The last frame from the shot "
+                  "that was last there went in as a reference, claimed as that room. Only "
+                  "where everybody in that frame is in the shot and nobody's clothes or "
+                  "hardware have changed since, or the picture would carry the old ones back")
         if _recovered:
             notes.append(
                 "recovered a face for "
@@ -12898,7 +13119,7 @@ class H3LongVideos:
         # What is played here is the user's own recording, which is a different thing
         # from ambience the node invents: it is not synthesised, it conditions
         # nothing, and it cannot put a voice in a wordless shot.
-        _bed_in, _built = ambient_audio, ""
+        _bed_in = ambient_audio
         if _bed_in is None and float(ambient_level or 0.0) > 0.0:
             notes.append(
                 f"ambient_level is {float(ambient_level):.2f} and nothing is wired to "
@@ -12930,7 +13151,7 @@ class H3LongVideos:
                 f"outside the node")
         audio, _bed_note = mix_ambient(audio, sr, _bed_in, ambient_level)
         if _bed_note:
-            notes.append(_built + _bed_note if _built else _bed_note)
+            notes.append(_bed_note)
         total = video.shape[0]
         # The finished chain is the largest thing this node holds, and it competes with
         # the MODELS for system RAM: ComfyUI offloads weights to RAM rather than

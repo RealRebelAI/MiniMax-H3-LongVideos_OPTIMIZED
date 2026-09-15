@@ -6442,7 +6442,8 @@ def test_a_garment_does_not_appear_at_the_first_frame():
     # ...and does NOT also list them as already worn. The add phrase is held back.
     check("...and does not also list them as worn", "Her blue shorts." not in sh[4])
     # From the next shot they are simply worn, the way a removal scrubs from its own.
-    check("the next shot wears them", "Her blue shorts." in sh[5])
+    # Said on Kate, now that the sheet makes her the only owner of blue shorts.
+    check("the next shot wears them", "Kate is wearing the blue shorts." in sh[5])
     check("info names the shot", "put a garment back ON" in info)
     # The OTHER use of add: -- revealing a layer already underneath -- is untouched.
     rev = run_node("A yard.\n\nNora stands by the gate.\n\n"
@@ -6466,7 +6467,7 @@ def test_a_garment_does_not_appear_at_the_first_frame():
     osh = [x for x in re.split(r"(?=\[Shot )", off) if x.strip()]
     check("a garment back with no dressing staged gets no clause",
           "off the body as the shot opens" not in off)
-    check("...and is described as worn in that shot", "Her blue shorts." in osh[3])
+    check("...and is described as worn in that shot", "Kate is wearing the blue shorts." in osh[3])
 
 
 def test_one_picture_two_people_is_reported():
@@ -7432,6 +7433,122 @@ def test_a_bare_chest_belongs_to_whoever_undressed():
     check("Maya keeps her sweater", "Maya: she, 38, green sweater." in last)
 
 
+def test_looking_at_a_place_does_not_go_there():
+    """"Maya looks out of the window at the garden" put the shot IN the garden, started
+    it fresh, and kept the film there: "Maya pours tea." two shots on was still in it."""
+    print("\n=== looking at a place does not move the shot there ===")
+    clip = FakeCLIP()
+    result = run_node("A kitchen with white tiles and a copper kettle.\n\nMaya slices bread.\n\n"
+                      "Maya looks out of the window at the garden.\n\nMaya pours tea.",
+                      character_memory="Maya: she, 38, grey cardigan.", clip=clip)
+    shots = _shots_of(result)
+    check("no shot is relocated to the garden", not any("takes place in the garden" in sh for sh in shots))
+    check("the glance keeps the keyframe", [len(items) for p, items in clip.seen if p.strip()] == [0, 1, 1])
+    check("the place reader still finds a real presence", S.place_named("Maya sits in the garden.") == "garden")
+    check("...and not a pointed-at room", S.place_named("Maya points at the kitchen.") == "")
+
+
+def test_a_room_the_film_returns_to_is_carried():
+    """A room shown earlier and returned to had no picture of itself: the words rebuilt
+    it, and the rebuild was a different room."""
+    print("\n=== a room the film comes back to is carried from when it was last shown ===")
+    memory = "Maya: she, 38, grey cardigan.\nOwen: he, 42, blue shirt."
+    def refs(clip):
+        return [len(items) for p, items in clip.seen if p.strip()]
+    clip = FakeCLIP()
+    result = run_node("A small apartment. The living room has a red sofa; the kitchen has white tiles.\n\n"
+                      "Maya reads on the red sofa in the living room.\n\nMaya fills the kettle in the kitchen.\n\n"
+                      "Maya sits on the sofa in the living room.", character_memory=memory, clip=clip)
+    last = _shots_of(result)[-1]
+    check("a cut back to the living room carries its picture", refs(clip)[-1] == 1)
+    check("...claimed as that room", "is the living room as the film last showed it" in last)
+    check("...naming who is in it", "Maya is the person in it." in last)
+    check("...and the author is told", "carried a room back" in str(result[2]))
+    # A walk back keeps the keyframe with Maya in it: a frame of the room with Maya in
+    # it too would be a second picture of her.
+    clip = FakeCLIP()
+    result = run_node("A small apartment. The living room has a red sofa; the kitchen has white tiles.\n\n"
+                      "Maya reads on the red sofa.\n\nMaya walks into the kitchen and fills the kettle.\n\n"
+                      "Maya comes back to the living room and sits on the sofa.", character_memory=memory, clip=clip)
+    check("a walk back by the same person carries no second picture of her",
+          "carried a room back" not in str(result[2]) and refs(clip)[-1] == 1)
+    # A change of clothes since retires the old frame.
+    clip = FakeCLIP()
+    result = run_node("A small apartment. The living room has a red sofa; the kitchen has white tiles.\n\n"
+                      "Maya reads on the red sofa in the living room.\n\nMaya takes off her cardigan in the kitchen.\n\n"
+                      "Maya fills the kettle in the kitchen.\n\nMaya sits on the sofa in the living room.",
+                      character_memory="Maya: she, 38, grey cardigan over a white blouse.", clip=clip)
+    check("a frame from before a costume change is not carried", "carried a room back" not in str(result[2]))
+
+
+def _entry_in(shot, name):
+    m = re.search(re.escape(name) + r": [^.]*\.", shot)
+    return m.group(0) if m else ""
+
+
+def test_a_layer_under_a_removed_garment_stays_on():
+    """"long red coat over a grey sweater" was one entry: the coat came off and took the
+    sweater with it, and the removal shot called her chest bare."""
+    print("\n=== taking off an outer layer leaves the one under it ===")
+    shots = _shots_of(run_node("A hallway.\n\nMaya takes off her coat.\n\nMaya checks her phone.",
+                               character_memory="Maya: she, 38, long red coat over a grey sweater, "
+                                                "black jeans, brown boots.", plan_only=True))
+    check("the sweater is still described after the coat", "grey sweater" in _entry_in(shots[1], "Maya"))
+    check("...the coat is not", "coat" not in _entry_in(shots[1], "Maya"))
+    check("...and no shot calls her chest bare", not any("chest, shoulders and arms are bare" in sh
+                                                        for sh in shots))
+    shots = _shots_of(run_node("A hallway.\n\nMaya takes off her jacket.\n\nMaya checks her phone.",
+                               character_memory="Maya: she, 38, denim jacket with rolled sleeves and a hood, "
+                                                "white t-shirt, black jeans.", plan_only=True))
+    check("a jacket's own hood goes with it", "hood" not in _entry_in(shots[1], "Maya")
+          and "white t-shirt" in _entry_in(shots[1], "Maya"))
+
+
+def test_how_a_garment_comes_off_is_read_right():
+    """"sheds her coat" removed nothing; "strips off her coat" stripped her naked;
+    "unzips his jacket" took the jacket off."""
+    print("\n=== sheds, strips off and unzips mean what they say ===")
+    memory = "Maya: she, 38, long red coat over a grey sweater, black jeans, brown boots."
+    shots = _shots_of(run_node("A hallway.\n\nMaya sheds her coat.\n\nMaya checks her phone.",
+                               character_memory=memory, plan_only=True))
+    check("'sheds her coat' takes the coat off", "coat" not in _entry_in(shots[1], "Maya"))
+    shots = _shots_of(run_node("A hallway.\n\nMaya strips off her coat.\n\nMaya checks her phone.",
+                               character_memory=memory, plan_only=True))
+    check("'strips off her coat' takes only the coat", _entry_in(shots[1], "Maya")
+          == "Maya: she, 38, a grey sweater, black jeans, brown boots.")
+    shots = _shots_of(run_node("An office.\n\nOwen unzips his jacket.\n\nOwen sits at his desk.",
+                               character_memory="Owen: he, 42, navy jacket over a white shirt, grey trousers.",
+                               plan_only=True))
+    check("an unzipped jacket stays on", "navy jacket" in _entry_in(shots[1], "Owen"))
+    check("...and the next shot keeps it open", "jacket open" in shots[1])
+    check("'unbuttons his shirt' opens the shirt, not the jacket over it",
+          S.engine.displaced_garments("Owen unbuttons his shirt.",
+                                      "Owen: he, 42, navy jacket over a white shirt.") == [("white shirt", "open")])
+
+
+def test_a_garment_put_back_on_in_prose_comes_back():
+    """"puts her coat back on" did nothing without an add: line, so the coat never came
+    back into her description."""
+    print("\n=== a garment put back on in prose is described again ===")
+    shots = _shots_of(run_node("A hallway.\n\nMaya takes off her coat.\n\nMaya checks her phone.\n\n"
+                               "Maya puts her coat back on.\n\nMaya opens the front door.",
+                               character_memory="Maya: she, 38, long red coat over a grey sweater, "
+                                                "black jeans, brown boots.", plan_only=True))
+    check("the put-back shot stages it going on", "off the body as the shot opens" in shots[2])
+    check("the next shot has her wearing it", "Maya is wearing the long red coat." in shots[3])
+
+
+def test_a_garment_called_by_its_familys_word_is_found():
+    """"takes off her shoes" beside "brown leather boots" named nothing on the sheet,
+    so the boots stayed on in the text while the beat took them off."""
+    print("\n=== 'shoes' for boots, 'sweatshirt' for a hoodie ===")
+    sheet = "Maya: she, 38, grey hoodie, black jeans, brown leather boots."
+    check("'shoes' means the boots", S.infer_removals("Maya takes off her shoes.", sheet) == ["boots"])
+    check("'sweatshirt' means the hoodie", S.infer_removals("Maya pulls off her sweatshirt.", sheet) == ["hoodie"])
+    check("two candidates is not a guess",
+          S.infer_removals("Maya takes off her top.", "Maya: she, 38, white shirt, blue blouse.") == [])
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -7593,6 +7710,12 @@ def main():
     test_a_two_word_name_makes_a_sheet()
     test_one_person_under_two_names_is_described_once()
     test_a_bare_chest_belongs_to_whoever_undressed()
+    test_looking_at_a_place_does_not_go_there()
+    test_a_room_the_film_returns_to_is_carried()
+    test_a_layer_under_a_removed_garment_stays_on()
+    test_how_a_garment_comes_off_is_read_right()
+    test_a_garment_put_back_on_in_prose_comes_back()
+    test_a_garment_called_by_its_familys_word_is_found()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

@@ -40,8 +40,9 @@ def test_two_things_in_one_beat():
     in the prompt at all -- not held, not named -- and hardware nobody mentions
     is hardware the model stops drawing."""
     print("\n=== two things in one beat ===")
-    hw = E.hardware_in("The guard handcuffs Ana's wrists behind her back and "
-                       "locks a steel collar around her neck.")
+    hw = [(c, p, w) for c, p, w, _at in E.hardware_spans(
+        "The guard handcuffs Ana's wrists behind her back and "
+        "locks a steel collar around her neck.")]
     names = [c for c, _p, _w in hw]
     check(f"both are read: {names}", "handcuffs" in names and "collar" in names)
     check("the material is kept", any(w == "steel collar" for _c, _p, w in hw))
@@ -283,8 +284,9 @@ def test_a_bare_region_stays_bare():
     check("naked reaches every region",
           E.nudity_in("Kate is naked.") == ["torso", "legs", "feet"])
     check("...and a naked flame is not a person", E.nudity_in("a naked flame") == [])
+    _torso = next((s for _rx, r, s in E._REGION_RX if r == "torso"), "")
     check("the torso sentence names the CHEST -- where the bra was invented",
-          "chest" in E.bare_sentence("torso"), E.bare_sentence("torso"))
+          "chest" in _torso, _torso)
 
 
 def test_a_squat_is_held():
@@ -457,7 +459,7 @@ def test_fastening_something_to_a_collar_does_not_date_the_collar():
     # common verb ("Dana leads her down the hall"), and no cheap pattern told
     # them apart without false-firing on the verb. Write "leash" for now.
     check("a bare 'lead' is not read as hardware (known gap)",
-          not E.hardware_in("Dana clips a lead to it"))
+          not E.hardware_spans("Dana clips a lead to it"))
 
 
 def test_a_name_is_matched_case_sensitively():

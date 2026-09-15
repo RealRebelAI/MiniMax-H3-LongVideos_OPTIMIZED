@@ -102,3 +102,5 @@ class PreparedVideo:
     upscale_target_short_edge: int
     vae: object
     w: int
+    shot_rooms: object = None         # {0-based shot: (room it opens in, room it ends in)}
+    hardware_changed: object = None   # 1-based shots that put hardware on or take it off
