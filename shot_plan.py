@@ -104,3 +104,5 @@ class PreparedVideo:
     w: int
     shot_rooms: object = None         # {0-based shot: (room it opens in, room it ends in)}
     hardware_changed: object = None   # 1-based shots that put hardware on or take it off
+    shot_frames: object = None        # {0-based shot: (who its frames show, who its last frame shows)}
+    reentry_shots: object = None      # {0-based shot: who walks in while the keyframe still has them}

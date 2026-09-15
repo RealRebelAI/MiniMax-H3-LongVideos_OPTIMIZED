@@ -619,6 +619,140 @@ def unresolved_pronouns(sheet, beat, previous=None):
     return out
 
 
+# LEAVING THE FRAME -- the transition out of the picture, which nothing had.
+#
+# Who a keyframe shows was read off the TEXT: the people the previous shot described.
+# But a shot that stops describing somebody does not take them out of the picture it
+# starts from. "Dan and Crystal sit at the table", then "Crystal laughs" -- Dan is
+# still sitting there, undescribed. The next beat about Dan then read as Dan "back
+# after a shot away", and the node sent a recovered frame of him as a reference while
+# the keyframe still had him in it: two pictures of Dan, and a second Dan drawn.
+#
+# Not _MOVES_OFF. That one ends a LOOK, and walking to the counter ends a look without
+# taking anybody out of the picture. A false exit here is a second picture of somebody
+# still standing in the frame, so only words that take a person OUT count -- leaving,
+# exiting, walking out/off/away, disappearing. "Steps out of the shower" and "runs out
+# of patience" go nowhere.
+_EXIT_ROOMS = "|".join(p for p in engine.PLACES.split("|")
+                       if p not in {"shower", "showers", "pool", "sauna", "van", "truck",
+                                    "elevator", "cell", "steps", "stairs", "court"})
+_EXIT_OUT_OF = (r"(?:(?:the|this|that|his|her|their|our)\s+)?(?:frame|shot|view|sight)"
+                r"|(?:the|this|that|his|her|their|our)\s+(?:[\w-]+\s+)?(?:" + _EXIT_ROOMS
+                + r"|house|home|building|apartment|flat|door|front\s+door|gate)")
+_EXIT = re.compile(
+    r"\b(?:leaves?|left|leaving)(?=\s*(?:[.,;:!?]|$)"
+    r"|\s+(?:again|together|without|through|by|via|for|with|and|then|now|quietly|alone)\b"
+    r"|\s+(?:the|this|that|his|her|their|our)\s+(?:[\w-]+\s+)?(?:" + _EXIT_ROOMS
+    + r"|house|home|building|apartment|flat)\b)"
+    r"|\bexit(?:s|ed|ing)?\b"
+    r"|\b(?:walk(?:s|ed|ing)?|go(?:es|ing)?|went|head(?:s|ed|ing)?|step(?:s|ped|ping)?|"
+    r"run(?:s|ning)?|ran|storm(?:s|ed|ing)?|hurr(?:y|ies|ied|ying)|slip(?:s|ped|ping)?|"
+    r"wander(?:s|ed|ing)?|strid(?:e|es|ing)|strode|march(?:es|ed|ing)?|"
+    r"rush(?:es|ed|ing)?|back(?:s|ed|ing)?|driv(?:e|es|ing)|drove|sneak(?:s|ed|ing)?|"
+    r"snuck|dash(?:es|ed|ing)?|bolt(?:s|ed|ing)?|stomp(?:s|ed|ing)?|limp(?:s|ed|ing)?)"
+    r"\s+(?:\w+ly\s+)?"
+    r"(?:out\b(?!\s+of\s+(?!" + _EXIT_OUT_OF + r"))|off\b(?!\s+(?:the|a|an|his|her|their)\b)"
+    r"|away\b(?!\s+from\b)|outside\b|home\b)"
+    r"|\b(?:disappear|vanish)(?:s|es|ed|ing)?\b"
+    r"|\bout\s+of\s+(?:(?:the|this|that|his|her|their)\s+)?(?:frame|shot|view|sight)\b",
+    re.I)
+# Where a new predicate can take its own subject. "Crystal hands Dan the keys and
+# leaves" is Crystal leaving -- Dan is an object -- and "...and he leaves" is Dan.
+_CLAUSE_OPEN = re.compile(r"(?:^|[,;:]|\b(?:and|then|but|while|as|when|before|after|so)\b)\s*$",
+                          re.I)
+
+
+def _movers(rx, beat, sheet, pool, alone_is_it=False):
+    """The people a movement in this beat belongs to -- the subject of each match of rx.
+
+    A name or a subject pronoun opening the clause, reached back across "and" to the
+    predicate it continues: "Crystal hands Dan the keys and leaves" is Crystal, and
+    "...and he leaves" is Dan. A pronoun resolves only to one person in `pool` who
+    declares it. A movement pinned on nobody is the sole person in the pool's when
+    `alone_is_it`, and otherwise nobody's."""
+    text = engine.staged_text(beat or "")
+    rows = [(n, ln) for n, ln in sheet_lines(sheet) if n]
+    names = [n for n, _ in rows]
+    pool = [n for n in (pool or []) if n]
+    out = []
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        for m in rx.finditer(sentence):
+            before = sentence[:m.start()]
+            subj = []
+            spots = []
+            for n in names:
+                spots += [(k.start(), k.end(), [n])
+                          for k in re.finditer(r"\b" + re.escape(n) + r"\b", before)]
+            for k in re.finditer(r"\b(she|he|they)\b", before, re.I):
+                word = k.group(1).lower()
+                if word == "they" and not any(sheet_pronoun(ln) == "they" for _, ln in rows):
+                    who = list(pool)
+                else:
+                    who = [n for n, ln in rows if n in pool and sheet_pronoun(ln) == word]
+                spots.append((k.start(), k.end(), who if len(who) == 1 or word == "they"
+                              else []))
+            spots.sort()
+            # The last spot that opens a clause is the subject; one joined to it by
+            # "and" or a comma is the same subject -- "Dan and Crystal leave".
+            # ...unless somebody stands right against the verb: "Crystal watches Dan
+            # walk away" is Dan walking.
+            for idx in range(len(spots) - 1, -1, -1):
+                s, e, who = spots[idx]
+                if (not _CLAUSE_OPEN.search(before[:s])
+                        and not (idx == len(spots) - 1
+                                 and re.fullmatch(r"\s+(?:\w+ly\s+)?", before[e:]))):
+                    continue
+                subj = list(who)
+                j = idx
+                while (j > 0 and re.fullmatch(r"\s*(?:,|and|,\s*and)\s*",
+                                              before[spots[j - 1][1]:spots[j][0]], re.I)):
+                    j -= 1
+                    subj = list(spots[j][2]) + subj
+                if j != idx and not _CLAUSE_OPEN.search(before[:spots[j][0]]):
+                    subj = list(who)
+                break
+            else:
+                subj = list(pool) if (alone_is_it and len(pool) == 1) else []
+            out += [n for n in subj if n not in out]
+    return out
+
+
+def leaves_in(beat, sheet, present=()):
+    """The people this beat takes OUT of the frame -- see _EXIT.
+
+    A leaving the beat does not pin on anybody is the one person in the frame's, or
+    nobody's: keeping somebody in the picture costs a reference, and taking out
+    somebody who is still there costs a second copy of them."""
+    return _movers(_EXIT, beat, sheet, present, alone_is_it=True)
+
+
+# COMING IN -- narrower than _ENTRANCE on purpose. That one decides whether a newcomer
+# can walk into the keyframe, and "walks over", "follows" and "joins" are fine there.
+# This one asks whether somebody ALREADY IN the frame is being staged arriving, and
+# "Dan walks over to the sink" is not that.
+_COMES_IN = re.compile(
+    r"\b(?:walk(?:s|ed|ing)?|com(?:e|es|ing)|came|step(?:s|ped|ping)?|run(?:s|ning)?|ran|"
+    r"hurr(?:y|ies|ied|ying)|burst(?:s|ing)?|barg(?:e|es|ed|ing)|slip(?:s|ped|ping)?|"
+    r"strid(?:e|es|ing)|strode|stroll(?:s|ed|ing)?|wander(?:s|ed|ing)?|rush(?:es|ed|ing)?|"
+    r"storm(?:s|ed|ing)?|march(?:es|ed|ing)?|sneak(?:s|ed|ing)?|snuck|limp(?:s|ed|ing)?|"
+    r"stagger(?:s|ed|ing)?)\s+(?:\w+ly\s+)?(?:back\s+)?"
+    r"(?:in\b(?!\s+(?:the|a|an|his|her|their)\b)|inside\b"
+    r"|into\s+(?:the|this|that|a)\s+(?:[\w-]+\s+)?(?:" + _EXIT_ROOMS
+    + r"|house|building|apartment|flat)\b)"
+    r"|\benter(?:s|ed|ing)?\b(?!\s+(?:the|a|his|her)\s+(?:code|number|password|data|pin)\b)"
+    r"|\barriv(?:e|es|ed|ing)\b"
+    r"|\b(?:com(?:e|es|ing)|came)\s+back\b(?=\s*(?:[.,;:!?]|$)"
+    r"|\s+(?:in|into|inside|home|with|and|carrying|holding)\b)"
+    r"|\breturn(?:s|ed|ing)?\b(?!\s+(?:the|a|an|his|her|their|it|them|to\s+(?:the|his|her|their)\s+"
+    r"(?:table|desk|couch|sofa|chair|bed|seat|work|book|screen|sink|stove|counter)))",
+    re.I)
+
+
+def comes_in(beat, sheet):
+    """The people this beat stages ARRIVING in the frame -- see _COMES_IN."""
+    return _movers(_COMES_IN, beat, sheet, [n for n, _ in sheet_lines(sheet) if n])
+
+
 _SHE_NOUNS = {"woman", "girl", "lady", "female", "mother", "wife", "sister", "daughter",
               "aunt", "grandmother", "niece"}
 _HE_NOUNS = {"man", "boy", "guy", "gentleman", "male", "father", "husband", "brother",
@@ -9399,6 +9533,9 @@ class H3LongVideos:
         active = []                 # the people the previous beat involved
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
+        _in_frame = []              # who the previous shot's last frame shows, described or not
+        shot_frames = {}            # 0-based shot -> (who its frames show, who its last frame shows)
+        reentry_shots = {}          # 0-based shot -> who walks in while the keyframe still has them
         _placed_shots = {}          # 0-based shot -> who it introduces in position
         # WHOSE FACE IS ALREADY COVERED BY A PICTURE OF THEIR OWN. A sheet line
         # carrying <Picture N> for a slot that actually has an image connected -- a
@@ -9466,6 +9603,7 @@ class H3LongVideos:
             # further down, to keep saying what is bare about somebody the keyframe
             # still carries, and that has nothing to do with the guard being on.
             _was = list(active)
+            _back_cands = []
             if character_guard:
                 shot_sheet, active = sheet_for_beat(sheet, body, active)
                 if len(sheet_lines(sheet)) > len(sheet_lines(shot_sheet)):
@@ -9559,9 +9697,9 @@ class H3LongVideos:
                         f"reference, so the room comes with it. Write the entrance -- "
                         f"'walks in', 'steps through' -- if you would rather they "
                         f"arrive on screen and keep the frame as the anchor")
-                _back = [n for n in active if n not in _was and n in _seen_before]
-                if _back:
-                    _returns.append((len(plan) + 1, list(_back)))
+                # Only a CANDIDATE here: whether the keyframe still has them in it is
+                # decided below, once the shot is known to be a cut or not.
+                _back_cands = [n for n in active if n not in _was and n in _seen_before]
                 _seen_before.update(active)
             else:
                 shot_sheet = sheet
@@ -10409,6 +10547,47 @@ class H3LongVideos:
             if (len(plan) and _opens_in and _room_before and _opens_in != _room_before):
                 cut_shots.add(len(plan))
             shot_rooms[len(plan)] = (_opens_in or "", here or "")
+            # WHO THE FRAMES SHOW, which is not who the text describes. A shot that
+            # stops describing somebody does not take them out of the picture it starts
+            # from: they stay in it until a beat walks them out, the camera goes to a
+            # room they are not in, or the chain breaks. Read by the render wherever a
+            # frame is used as a picture of the people in it. See _EXIT.
+            _fresh = (len(plan) in cut_shots
+                      or (restart_after_removal and (len(plan) - 1) in stripped_shots)
+                      # The render's own fresh start for somebody introduced in position
+                      # when the frame before cannot ride as a reference.
+                      or (len(plan) in _placed_shots and not _cond_module.may_carry_room(
+                          shot_frames.get(len(plan) - 1, ([], []))[1], active,
+                          {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}))
+                      or bool(_ALONE.search(engine.staged_text(body))))
+            _kept = [] if _fresh else list(_in_frame)
+            # SOMEBODY STILL IN THE FRAME, STAGED WALKING IN. "Dan sits at the table",
+            # "Crystal walks in", "Dan walks in with the mugs": nothing walked Dan out,
+            # so the frame this shot opens on still has him sitting there, and the text
+            # brings in another one. That is a second Dan, and no wording undoes a
+            # picture. The shot starts fresh instead, the same trade a room change makes.
+            # Only for somebody the previous shot did not describe -- a person it staged
+            # at the door walks in from the door -- and never on a walk between rooms,
+            # whose keyframe is the room being left.
+            _again = [n for n in comes_in(body, sheet)
+                      if n in _kept and n not in _was] if (plan and not _travel) else []
+            if _again:
+                reentry_shots[len(plan)] = _again
+                _kept = []
+            _carry = [n for n in _kept if n not in active]
+            _shows = list(active) + _carry
+            # A walk to another room leaves behind whoever it does not describe.
+            _ends_with = list(active) + ([] if (_to and _to != _room_before) else _carry)
+            shot_frames[len(plan)] = (_shows, _ends_with)
+            # BACK AFTER A SHOT AWAY means not in the keyframe -- not merely undescribed
+            # in the shot before. Dan sitting at the table through "Crystal laughs" is
+            # still in the frame "Dan smiles" opens on, and a recovered picture of him
+            # there is a second Dan.
+            _back = [n for n in _back_cands if n not in _kept]
+            if _back:
+                _returns.append((len(plan) + 1, list(_back)))
+            _gone = leaves_in(body, sheet, _shows)
+            _in_frame = [n for n in _ends_with if n not in _gone]
             if here and here not in _described_rooms and here not in _undescribed:
                 _undescribed.append(here)
             # ...and say so on later shots, because the scene paragraph still
@@ -10737,7 +10916,12 @@ class H3LongVideos:
                 _extras_seen = True
             elif extras_dismissed(body):
                 _extras_seen = False
-            _cast_hold = cast_hold(_described, body, _extras_seen)
+            # COUNTED FROM THE PICTURE, not only the text. "Crystal laughs" opening on a
+            # frame with Dan beside her was told there is one person in the shot: one
+            # body, one face -- a sentence against a keyframe with two people in it,
+            # which the model can only reconcile by merging them. The same reason the
+            # count stands down while extras are still in the room. See shot_frames.
+            _cast_hold = cast_hold(list(_described or []) + _carry, body, _extras_seen)
 
             # Where the beat says somebody is looking, said once more as a fact
             # about the eyes and the head. One mention in the beat loses to a
@@ -11450,6 +11634,15 @@ class H3LongVideos:
                 f"Split it in two -- one sentence for the film ('A small flat at night.') and "
                 f"one for the room ('Her bedroom has an unmade bed and a lamp.') -- and the "
                 f"room's half will wait outside that room on its own")
+        if reentry_shots:
+            notes.append(
+                f"START FRESH where somebody still in the frame is staged walking in -- "
+                + "; ".join(f"shot {k + 1}: {_join_names(v)}"
+                            for k, v in sorted(reentry_shots.items()))
+                + ". Nothing walked them out, so the frame the shot opens on still has "
+                f"them in it, and the beat brings them in again: kept, that is two of "
+                f"them. Write them leaving first ('Dan goes out to the car') and the shot "
+                f"keeps its keyframe")
         if cut_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n + 1) for n in sorted(cut_shots))} START FRESH, "
@@ -12539,7 +12732,8 @@ class H3LongVideos:
             sigmas=sigmas, silence_nonspeech=silence_nonspeech,
             speech_lead_seconds=speech_lead_seconds, speech_tail_seconds=speech_tail_seconds, hold_levels=hold_levels, staging_shots=staging_shots, steps=steps,
             stripped_shots=stripped_shots, cut_shots=cut_shots,
-            shot_rooms=shot_rooms, hardware_changed=hardware_changed,
+            shot_rooms=shot_rooms, hardware_changed=hardware_changed, shot_frames=shot_frames,
+            reentry_shots=reentry_shots,
             tiled_decode=tiled_decode, trim_seam=trim_seam,
             upscale=upscale, upscale_batch=upscale_batch, upscale_model=upscale_model,
             upscale_target_short_edge=upscale_target_short_edge, vae=vae, w=w,
@@ -12553,6 +12747,8 @@ class H3LongVideos:
         _soft_landing = prepared._soft_landing
         _tagged_names = prepared._tagged_names
         shot_rooms = prepared.shot_rooms or {}
+        _shot_frames = prepared.shot_frames or {}
+        reentry_shots = prepared.reentry_shots or {}
         hardware_changed = prepared.hardware_changed or set()
         ambient_audio = prepared.ambient_audio
         ambient_level = prepared.ambient_level
@@ -12599,6 +12795,12 @@ class H3LongVideos:
         upscale_target_short_edge = prepared.upscale_target_short_edge
         vae = prepared.vae
         w = prepared.w
+
+        def _frame_cast(k, last=False):
+            # Who shot k's frames show -- its described cast plus anybody the chain
+            # still carries. See shot_frames.
+            _c = [n for n in plan.shots[k].cast if n]
+            return list(_shot_frames.get(k, (_c, _c))[1 if last else 0])
 
         if apply_model_sampling:
             model, ms_note = apply_h3_model_sampling(model, shift_video, shift_audio)
@@ -12676,7 +12878,7 @@ class H3LongVideos:
             # _placed_shots branch on purpose: that one DEMOTES the frame to a
             # reference claiming "this room a moment earlier", which is a lie when the
             # room has changed. See cut_shots.
-            elif i in cut_shots:
+            elif i in cut_shots or i in reentry_shots:
                 shot_handoff = None
             # SHOT 1'S first_frame, READ AS THE SET. Same answer as the branch below
             # and for the same reason -- a keyframe is a picture, and the people the
@@ -12712,7 +12914,7 @@ class H3LongVideos:
             # cannot account for is the node's oldest bug: a picture nobody claims is
             # another person. When it cannot be claimed, the old fresh start stands.
             elif i in _placed_shots:
-                _was_here = [n for n in (plan.shots[i - 1].cast) if n]
+                _was_here = _frame_cast(i - 1, last=True)
                 _here_now = plan.shots[i].cast
                 # ...and NOT when somebody in that frame already has a portrait of
                 # their own in this shot. Their identity is carried by that
@@ -12794,7 +12996,7 @@ class H3LongVideos:
             _opens, _ends = shot_rooms.get(i, ("", ""))
             _prev_end = shot_rooms.get(i - 1, ("", ""))[1] if i else ""
             _back, _arriving = "", False
-            if i in cut_shots and _opens in _room_frames:
+            if (i in cut_shots or i in reentry_shots) and _opens in _room_frames:
                 _back = _opens
             elif _ends and _ends != _prev_end and _ends != _opens and _ends in _room_frames:
                 _back, _arriving = _ends, True
@@ -12805,13 +13007,16 @@ class H3LongVideos:
                 # frame of the arrival room with the same person in it is a second
                 # picture of her, which is how a second one gets drawn. A cut drops the
                 # keyframe, so there the frame is the only picture and needs no such test.
-                _in_keyframe = (set(plan.shots[i - 1].cast)
+                _in_keyframe = (set(_frame_cast(i - 1, last=True))
                                 if (_arriving and i and shot_handoff is not None) else set())
                 for _frame, _in_it, _gen, _from in _room_frames[_back]:
+                    # ...and nobody whose face was recovered for this shot above: that
+                    # is already a picture of them, and this would be the second.
                     if (_gen == _wardrobe_gen
                             and all(n in _cast_now for n in _in_it)
                             and not any(n in _tagged_names for n in _in_it)
-                            and not any(n in _in_keyframe for n in _in_it)):
+                            and not any(n in _in_keyframe for n in _in_it)
+                            and not (_who and _who in _in_it)):
                         _extra.append(_frame)
                         shot_prompt = shot_prompt + returning_room_claim(
                             len(shot.refs) + len(_extra), _back, _in_it, _arriving)
@@ -12980,7 +13185,10 @@ class H3LongVideos:
                                     or _n in bared_shots
                                     or _n in staging_shots)
             try:
-                if (hand_src.shape[0] and len(plan.shots[i].cast) == 1 and _wardrobe_normal):
+                # ONE PERSON IN THE FRAME, not in the text: a shot describing only
+                # Crystal while Dan sits beside her is a picture of both of them.
+                if (hand_src.shape[0] and len(plan.shots[i].cast) == 1
+                        and len(_frame_cast(i)) == 1 and _wardrobe_normal):
                     _mid = hand_src.shape[0] // 2
                     _keep = hand_src[_mid:_mid + 1].detach().clamp(0.0, 1.0).to(
                         "cpu", copy=True)
@@ -13003,7 +13211,7 @@ class H3LongVideos:
                         # without the person walking. Three bounds the memory.
                         _room_frames[_room_end] = ([(
                             hand_src[-1:].detach().clamp(0.0, 1.0).to("cpu", copy=True),
-                            [n for n in plan.shots[i].cast if n], _wardrobe_gen, i + 1)]
+                            _frame_cast(i, last=True), _wardrobe_gen, i + 1)]
                             + _room_frames.get(_room_end, []))[:3]
                 except Exception:
                     pass                   # a carried room is a nicety, not the render

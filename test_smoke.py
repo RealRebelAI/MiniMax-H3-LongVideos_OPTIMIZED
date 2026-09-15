@@ -1975,6 +1975,87 @@ def test_dan_is_not_instantiated_twice():
           "two people in the shot" not in solo, solo)
 
 
+def test_somebody_still_in_the_frame_is_not_back():
+    """REPORTED, still: a second Dan.
+
+    Who a keyframe shows was read off the TEXT -- the previous shot's described cast.
+    A reaction shot describing only Crystal does not take Dan out of the picture it
+    opens on, so the next beat about Dan read as him "back after a shot away" and the
+    node sent a recovered frame of him while the keyframe still had him sitting there."""
+    print("\n=== somebody still in the frame is not back after a shot away ===")
+    mem = ("Dan: he, 35, black t-shirt, blue jeans.\n"
+           "Crystal: she, 35, white t-shirt, blue jeans.")
+
+    def pictures(P):
+        clip = FakeCLIP()
+        out = run_node(P, character_memory=mem, clip=clip)
+        return [len(items) for p, items in clip.seen if p.strip()], str(out[2]), out[3]
+
+    refs, info, _ = pictures("A kitchen.\n\nDan pours coffee.\n\n"
+                             "Crystal sits down opposite Dan.\n\nCrystal laughs.\n\nDan smiles.")
+    check("an undescribed person is still in the keyframe, so no second picture of him",
+          refs == [0, 1, 1, 1], str(refs))
+    check("...and he is not reported as back", "back after a shot away" not in info)
+    check("...and nothing is recovered", "recovered a face" not in info)
+    shots = _shots("A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
+                   "Crystal laughs.", character_memory=mem)
+    check("the reaction shot counts the person the frame still carries",
+          "There are two people in the shot" in shots[2]
+          and "There is one person" not in shots[2], shots[2][-160:])
+    check("...without describing him", "Dan:" not in shots[2], shots[2][:120])
+
+    # Control: a real exit, and the return gets its picture.
+    refs, info, _ = pictures("A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
+                             "Dan walks out of the kitchen.\n\nCrystal laughs.\n\n"
+                             "Dan comes back in and smiles.")
+    check("somebody who walked out and comes back is recovered",
+          "recovered a face for Dan on shot 5, from shot 1" in info, info[-300:])
+    check("...and the shot after he left counts one person",
+          "There is one person in the shot" in _shots(
+              "A kitchen.\n\nDan pours coffee.\n\nCrystal sits down opposite Dan.\n\n"
+              "Dan walks out of the kitchen.\n\nCrystal laughs.", character_memory=mem)[3])
+
+    # A face is captured from a frame with ONE PERSON IN IT, not one person described.
+    refs, info, _ = pictures("A kitchen.\n\nDan and Crystal sit at the table.\n\nCrystal laughs.\n\n"
+                             "Crystal walks out of the kitchen.\n\nDan reads the paper.\n\n"
+                             "Crystal comes back in.")
+    check("a frame that also shows Dan is never recovered as Crystal's face",
+          "recovered a face" not in info and refs[-1] == 1, f"{refs} {info[-200:]}")
+
+    # Staged walking in while the frame still has him: the shot starts fresh.
+    refs, info, script = pictures("A kitchen.\n\nDan sits at the table.\n\nCrystal walks in.\n\n"
+                                  "Dan walks in and pours coffee.")
+    check("walking in while still in the frame starts fresh",
+          "START FRESH where somebody still in the frame is staged walking in -- shot 3: Dan"
+          in info, info[-300:])
+    last = script.split("\n---\n")[-1]
+    check("...with at most one picture of him", refs[-1] <= 1
+          and len(re.findall(r"<Picture \d+>", last)) == refs[-1], f"{refs} {last[:160]}")
+    for P, why in (("A hallway.\n\nDan stands at the front door.\n\nDan walks in.",
+                    "somebody the shot before staged at the door"),
+                   ("A house.\n\nDan walks down the hallway.\n\nDan walks into the kitchen.",
+                    "a walk between rooms")):
+        info = run_node(P, plan_only=True, character_memory=mem)[2]
+        check(f"...but not {why}", "still in the frame is staged walking in" not in info)
+
+    # Who leaves, read off the subject of the leaving.
+    both = ["Dan", "Crystal"]
+    for beat, want in (("Crystal hands Dan the keys and leaves.", ["Crystal"]),
+                       ("Crystal hands Dan the keys and he leaves.", ["Dan"]),
+                       ("Crystal watches Dan walk away.", ["Dan"]),
+                       ("They leave together.", both),
+                       ("Dan steps out of the shower.", []),
+                       ("Dan leaves the cup on the table.", []),
+                       ("Dan steps away from the window.", []),
+                       ('Crystal says: "Dan, leave."', [])):
+        check(f"leaves_in {beat!r}", S.leaves_in(beat, mem, both) == want,
+              str(S.leaves_in(beat, mem, both)))
+    for beat, want in (("Dan comes back in with two mugs.", ["Dan"]),
+                       ("Dan walks over to the sink.", []),
+                       ("Dan returns to his seat.", [])):
+        check(f"comes_in {beat!r}", S.comes_in(beat, mem) == want, str(S.comes_in(beat, mem)))
+
+
 def test_a_carried_room_is_not_a_second_picture_of_somebody():
     """REPORTED: a duplicate Mistress.
 
@@ -7750,6 +7831,7 @@ def main():
     test_a_line_is_marked_however_it_is_punctuated()
     test_a_two_word_sheet_name_does_not_duplicate_her()
     test_dan_is_not_instantiated_twice()
+    test_somebody_still_in_the_frame_is_not_back()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()
