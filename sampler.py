@@ -480,7 +480,9 @@ def sheet_for_beat(sheet, beat, previous=None):
         named = ([n for n in everyone if n in named] if len(named) >= 2
                  else everyone)
         return "\n".join(ln for n, ln in rows if n in named), named
-    used = {m.group(0).lower() for m in _PRONOUN.finditer(beat or "")}
+    # Pronouns in what the beat STAGES only -- not in speech, not in a question the
+    # narration asks. See engine.staged_text.
+    used = {m.group(0).lower() for m in _PRONOUN.finditer(engine.staged_text(beat or ""))}
     if used:
         # Resolve a pronoun to the person whose sheet DECLARES it. Adding the whole
         # previous cast on any pronoun put someone in a shot they were not in --
@@ -603,7 +605,7 @@ def unresolved_pronouns(sheet, beat, previous=None):
     rows = sheet_lines(sheet)
     named = [n for n, _ in rows
              if n and re.search(r"\b" + re.escape(n) + r"\b", beat or "")]
-    used = {m.group(0).lower() for m in _PRONOUN.finditer(beat or "")}
+    used = {m.group(0).lower() for m in _PRONOUN.finditer(engine.staged_text(beat or ""))}
     out = []
     for group, words in _PRONOUN_SET.items():
         if not used & words:
@@ -617,6 +619,13 @@ def unresolved_pronouns(sheet, beat, previous=None):
     return out
 
 
+_SHE_NOUNS = {"woman", "girl", "lady", "female", "mother", "wife", "sister", "daughter",
+              "aunt", "grandmother", "niece"}
+_HE_NOUNS = {"man", "boy", "guy", "gentleman", "male", "father", "husband", "brother",
+             "son", "uncle", "grandfather", "nephew"}
+_PERSON_NOUN = re.compile(
+    r"^(?:(?:a|an|the)\s+)?(?:[\w-]+\s+){0,2}(" + "|".join(sorted(_SHE_NOUNS | _HE_NOUNS))
+    + r")\b(?!['\u2019])", re.I)
 _PRONOUN_SET = {"she": {"she", "her", "hers"},
                 "he": {"he", "him", "his"},
                 "they": {"they", "them", "their", "theirs"}}
@@ -629,9 +638,30 @@ def sheet_pronoun(line):
     "her coat" in a beat be resolved to Maya rather than to whoever was in the last
     shot."""
     body = (line or "").split(":", 1)[-1]
-    for group, words in _PRONOUN_SET.items():
-        if any(re.search(r"\b" + w + r"\b", body, re.I) for w in words):
-            return group
+    # THE DECLARED ONE, NOT THE FIRST GROUP WITH A WORD ANYWHERE. The groups were
+    # checked she-then-he-then-they, so "Owen: he, 42, blue shirt, carries her photo
+    # in his wallet" was a "she" -- "her" is in his description -- and every "he" in
+    # the script stopped reaching him while every "she" could. The pronoun standing
+    # alone as an item ("he", "she", "they") is the declaration; failing that, the
+    # earliest pronoun in the entry.
+    group_of = {w: g for g, words in _PRONOUN_SET.items() for w in words}
+    for item in body.split(","):
+        word = item.strip().strip(".;").lower()
+        if word in _PRONOUN_SET:
+            return word
+    hits = [(m.start(), group_of[m.group(0).lower()])
+            for m in re.finditer(r"\b(?:" + "|".join(group_of) + r")\b", body, re.I)]
+    if hits:
+        return min(hits)[1]
+    # ...AND A PERSON NOUN, WHERE NO PRONOUN IS WRITTEN. "Maya: 38, a woman with red
+    # hair" says who she is in the author's own word, and ignoring it left every "she"
+    # in the script with nobody to reach. Only as the head of an item describing the
+    # person -- "a tall man", "a young woman" -- never a possessive: "her brother's
+    # jacket" is not a brother.
+    for item in body.split(","):
+        m = _PERSON_NOUN.match(item.strip())
+        if m:
+            return "she" if m.group(1).lower() in _SHE_NOUNS else "he"
     return None
 
 
@@ -9044,6 +9074,22 @@ class H3LongVideos:
                 f"using both put the person in every shot twice. A model told about one "
                 f"person twice renders two of them. Kept the character_memory entry and "
                 f"dropped the duplicate")
+        # NOBODY FOR A PRONOUN TO REACH. "He sits down at the table." against a sheet
+        # that declares no pronoun for Owen kept the previous shot's cast -- Maya alone
+        # -- so the shot described a woman for a beat about a man, and the model drew
+        # him from nothing beside her. Nothing here can know who "he" is without the
+        # sheet saying, and guessing from a name is not knowing. Said, so it is fixed
+        # where it can be: in the sheet.
+        _undeclared = [n for n, ln in sheet_lines(sheet) if n and not sheet_pronoun(ln)]
+        if _undeclared and any(re.search(r"\b(?:he|she|him|her|his|hers)\b", b or "", re.I)
+                               for b in beats):
+            notes.append(
+                f"{_join_names(_undeclared)} {'have' if len(_undeclared) > 1 else 'has'} no "
+                f"pronoun on the sheet, and the script uses he/she -- so a beat that says "
+                f"\"he\" or \"she\" instead of a name cannot be resolved to "
+                f"{'them' if len(_undeclared) > 1 else 'that entry'}, and the shot keeps "
+                f"whoever the previous one described instead. Write the pronoun into each "
+                f"entry (\"Owen: he, 42, ...\")")
         static = build_scene(anchor, scene, "", "")
         scene = build_scene(anchor, scene, "", sheet)      # the whole of it, for inference
         # Which rooms the author actually DESCRIBES. A room the text only names is a
@@ -9434,6 +9480,11 @@ class H3LongVideos:
                 # not. This is what "walks out of frame and comes back looking
                 # different" is.
                 for _grp, _who_all in unresolved_pronouns(sheet, body, _was):
+                    # Only when it really is neither. A shot that keeps them anyway --
+                    # somebody walking in on both of them -- describes them, and saying
+                    # otherwise sends the author to fix a beat that is not broken.
+                    if any(n in (active or []) for n in _who_all):
+                        continue
                     notes.append(
                         f"shot {len(plan) + 1} says '{_grp}' and "
                         f"{' and '.join(_who_all)} all answer to it, so the guard could "

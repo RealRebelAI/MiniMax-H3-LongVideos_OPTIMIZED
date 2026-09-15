@@ -7549,6 +7549,56 @@ def test_a_garment_called_by_its_familys_word_is_found():
           S.infer_removals("Maya takes off her top.", "Maya: she, 38, white shirt, blue blouse.") == [])
 
 
+def _described_in(shot, names):
+    return [n for n in names if f"{n}:" in shot]
+
+
+def test_a_pronoun_in_a_description_is_not_the_declared_one():
+    """"Owen: he, ... carries her photo" was read as "she": the groups were tried in a
+    fixed order and "her" is in his description."""
+    print("\n=== the declared pronoun wins over one in the description ===")
+    check("a declared 'he' with 'her' in the description is he",
+          S.sheet_pronoun("Owen: he, 42, blue shirt, carries her photo in his wallet.") == "he")
+    check("a declared 'she' with 'his' in the description is she",
+          S.sheet_pronoun("Maya: she, 38, wears his old watch.") == "she")
+    check("with nothing declared, a person noun says it",
+          S.sheet_pronoun("Maya: 38, a woman with red hair.") == "she"
+          and S.sheet_pronoun("Owen: 42, a tall man, blue shirt.") == "he")
+    check("...but a possessive is not the person", S.sheet_pronoun("Kit: 25, brother's jacket.") is None)
+    shots = _shots_of(run_node("A kitchen.\n\nMaya pours coffee.\n\nHe sits down.\n\nShe smiles.",
+                               character_memory="Maya: 38, a woman with red hair, green sweater.\n"
+                                                "Owen: 42, a tall man, blue shirt.", plan_only=True))
+    check("'He sits down' reaches the man the sheet calls a man", _described_in(shots[1], ["Maya", "Owen"]) == ["Owen"])
+    check("...and 'She smiles' the woman", _described_in(shots[2], ["Maya", "Owen"]) == ["Maya"])
+
+
+def test_a_name_used_as_a_word_stages_nobody():
+    """"Will he come?" and "May I come in?" put Will and May into shots about waiting for
+    them."""
+    print("\n=== 'Will he come?' does not put Will in the shot ===")
+    memory = "Will: he, 50, grey coat.\nMaya: she, 38, green sweater."
+    shots = _shots_of(run_node("A porch.\n\nMaya waits by the door. Will he come?\n\nWill opens the gate.",
+                               character_memory=memory, plan_only=True))
+    check("the waiting shot describes only Maya", _described_in(shots[0], ["Will", "Maya"]) == ["Maya"])
+    check("...and Will is there when he actually arrives", _described_in(shots[1], ["Will", "Maya"]) == ["Will"])
+    shots = _shots_of(run_node("A doorway.\n\nOwen knocks. May I come in?",
+                               character_memory="May: she, 30, blue dress.\nOwen: he, 42, blue shirt.", plan_only=True))
+    check("'May I come in?' does not stage May", _described_in(shots[0], ["May", "Owen"]) == ["Owen"])
+
+
+def test_an_undeclared_pronoun_is_reported():
+    """With no pronoun on the sheet, "He sits down" cannot reach anybody and keeps the last
+    shot's cast. That cannot be guessed; it is said."""
+    print("\n=== a sheet with no pronouns is reported when the script uses them ===")
+    result = run_node("A kitchen.\n\nMaya pours coffee.\n\nHe sits down.",
+                      character_memory="Maya: 38, green sweater.\nOwen: 42, blue shirt.", plan_only=True)
+    check("the author is told which entries have no pronoun",
+          "Maya and Owen have no pronoun on the sheet" in str(result[2]))
+    quiet = run_node("A kitchen.\n\nMaya pours coffee.\n\nOwen sits down.",
+                     character_memory="Maya: 38, green sweater.\nOwen: 42, blue shirt.", plan_only=True)
+    check("...and not when the script only uses names", "no pronoun on the sheet" not in str(quiet[2]))
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -7716,6 +7766,9 @@ def main():
     test_how_a_garment_comes_off_is_read_right()
     test_a_garment_put_back_on_in_prose_comes_back()
     test_a_garment_called_by_its_familys_word_is_found()
+    test_a_pronoun_in_a_description_is_not_the_declared_one()
+    test_a_name_used_as_a_word_stages_nobody()
+    test_an_undeclared_pronoun_is_reported()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

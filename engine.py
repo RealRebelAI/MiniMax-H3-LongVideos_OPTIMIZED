@@ -469,6 +469,17 @@ def _outside_speech(text):
     return _SPOKEN_SPAN.sub(" ", text or "")
 
 
+def staged_text(text):
+    """What a beat STAGES: not what anybody says, and not what the narration asks.
+
+    A narrated question is the same kind of thing as a line of speech. "Maya waits by
+    the door. Will he come?" asks whether he will, which is to say he is not there --
+    and the "he" read as him being present, so Will was described into the shot of
+    her waiting for him. Removed for deciding who is in the shot, as speech is."""
+    staged = _outside_speech(text)
+    return " ".join(s for s in re.split(r"(?<=[.!?])\s+", staged) if not s.rstrip().endswith("?"))
+
+
 # THREE modifiers, not two: "mirrored stainless steel collar" is three words and
 # a noun, and the third was the first to be dropped.
 _HW_ONE = _rx(r"\b(" + _ADJ + r"(?:\s+" + _ADJ + r"){0,2}\s+)?("
@@ -1364,6 +1375,10 @@ def _alias_at(word, staged):
     return fallback
 
 
+_AUX_FOLLOWER = re.compile(r"\s+(?:I|you|he|she|we|they|it|there|this|that|anyone|someone|"
+                           r"everyone|anybody|somebody)\b")
+
+
 def names_in(beat, cast):
     """Names this beat STAGES, in the order the sentence puts them.
 
@@ -1375,14 +1390,23 @@ def names_in(beat, cast):
     Speech-stripped, for the same reason it is everywhere else -- "McKenna, where
     are you?" is how absence gets written, and reading it as presence put a whole
     sheet entry into a shot the person is not in."""
-    staged = _outside_speech(beat or "")
+    staged = staged_text(beat or "")
     names = [str(n) for n in (cast or []) if n]
     hits, found = [], set()
     for n in names:
-        m = re.search(r"\b" + re.escape(n) + r"\b", staged)
-        if m:
+        # A NAME THAT IS ALSO A WORD. "Will he come?" and "May I come in?" open a
+        # sentence with the name followed by who the question is about, and read as
+        # the person they staged Will and May -- a second character in a shot about
+        # somebody waiting for them. A name followed straight away by a subject
+        # pronoun at the start of a sentence is the verb; the next use can still be
+        # the person ("Will opens the gate").
+        for m in re.finditer(r"\b" + re.escape(n) + r"\b", staged):
+            _opens = re.search(r"(?:^|[.!?]\s*[\"'\u201c]?)\s*$", staged[:m.start()])
+            if _opens and _AUX_FOLLOWER.match(staged[m.end():]):
+                continue
             hits.append((m.start(), n))
             found.add(n)
+            break
     # A SHEET NAME IS OFTEN LONGER THAN WHAT THE BEATS CALL HER. "Mistress Vale"
     # on the sheet and "the Mistress" in every beat matched nothing, so her line
     # was in no shot at all and the model invented her from scratch each time.
