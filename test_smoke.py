@@ -4862,11 +4862,14 @@ def test_the_age_reaches_the_shot_and_the_floor_holds():
     # ...AND THE REFUSAL IS A REFUSAL: it raises before anything is sampled, so there is
     # no half-rendered output and no quietly-softened one either.
     _raised = ""
-    # The node now allows child pornography - no refusal happens.
-    _ok = run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
-                   character_memory="Kate: she, 28.\nSam: she, 15.")
-    check("a declared minor plus sexual staging renders", "[Shot 1]" in _ok[3])
-    check("no body described for declared minor", "no body is described" in _ok[4])
+    try:
+        run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
+                 character_memory="Kate: she, 28.\nSam: she, 15.")
+    except RuntimeError as _e:
+        _raised = str(_e)
+    check("a declared minor plus sexual staging renders nothing", _raised != "")
+    check("...saying so plainly", "REFUSED" in _raised and "nothing was rendered" in _raised)
+    check("...and naming the entry that tripped it", "Sam" in _raised)
     # Both halves of that really are required, end to end.
     _ok = run_node("A bedroom.\n\nKate undresses and lies down.\n\nShe moans.",
                    plan_only=True, character_memory="Kate: she, 28.")
@@ -7329,6 +7332,106 @@ def test_upscale_paths():
           "clamp(0.0, 1.0)" in src)
 
 
+def _shots_of(result):
+    return [sh.split("] ", 1)[1] if "] " in sh else sh for sh in result[3].split("\n---\n")]
+
+
+def test_the_opening_does_not_name_people_a_shot_leaves_out():
+    """An opening that names people rode into every shot unscoped: "Maya and Owen wait
+    in a train station." headed a shot the node had cut down to Owen alone, so the
+    model was told two people stand there and given one person to draw."""
+    print("\n=== the opening paragraph names nobody a shot leaves out ===")
+    memory = "Maya: she, 38, green sweater.\nOwen: he, 42, blue shirt."
+    shots = _shots_of(run_node("Maya and Owen wait in a train station.\n\n"
+                               "Owen checks the departure board.\n\n"
+                               "Maya reads a newspaper on a bench.",
+                               character_memory=memory, plan_only=True))
+    check("two solo shots", len(shots) == 2)
+    check("Owen's shot does not name Maya", "Maya" not in shots[0])
+    check("Maya's shot does not name Owen", "Owen" not in shots[1])
+    check("...and both keep the station", all("train station" in sh for sh in shots))
+    # A pronoun after a cut sentence goes with it.
+    shots = _shots_of(run_node("Maya sits at her desk in an office. She types a report.\n\n"
+                               "Owen knocks and walks in.",
+                               character_memory=memory, plan_only=True))
+    check("no stray 'She' about an absent Maya", "She types" not in shots[-1]
+          and "Maya" not in shots[-1] and "office" in shots[-1])
+    # The anchor is scoped the same way.
+    shots = _shots_of(run_node("A kitchen.\n\nOwen chops onions.", character_memory=memory,
+                               anchor="Maya and Owen are in a bright kitchen.", plan_only=True))
+    check("an anchor naming an absent person does not reach his solo shot",
+          "Maya" not in shots[-1] and "kitchen" in shots[-1])
+    # Control: everyone the opening names is in the shot, so it is untouched.
+    shots = _shots_of(run_node("Maya and Owen wait in a train station.\n\n"
+                               "They look at the board together.",
+                               character_memory=memory, plan_only=True))
+    check("an opening about the whole cast is kept word for word",
+          "Maya and Owen wait in a train station." in shots[0])
+
+
+def test_a_sheet_written_first_is_a_sheet():
+    """Opening a script with who is in it made the sheet the SCENE: every person
+    described in every shot as prose, with no scoping, count or mouth guard."""
+    print("\n=== a character sheet written first is a sheet, not the scene ===")
+    shots = _shots_of(run_node("Maya: she, 38, green sweater.\nOwen: he, 42, blue shirt.\n\n"
+                               "A park.\n\nMaya sits on a bench.\n\nOwen feeds the ducks.",
+                               plan_only=True))
+    check("the sheet is not a shot of its own", len(shots) == 2)
+    check("Owen's shot does not describe Maya", "Maya:" not in shots[1] and "Owen:" in shots[1])
+    check("...and counts one person", "There is one person in the shot" in shots[1])
+    check("the park is still the scene", all(sh.startswith("A park.") for sh in shots))
+    # Control: a heading with a colon is not a person and stays the scene.
+    shots = _shots_of(run_node("Interior: a kitchen at night.\n\nMaya: she, 38, green sweater.\n\n"
+                               "Maya makes tea.", plan_only=True))
+    check("'Interior: ...' stays the scene", shots[0].startswith("Interior: a kitchen at night."))
+
+
+def test_a_two_word_name_makes_a_sheet():
+    """"Mistress Vale:" did not match the sheet-line pattern, so the sheet rendered as
+    a shot and every later shot described nobody."""
+    print("\n=== a sheet entry with a two-word name is still a sheet ===")
+    shots = _shots_of(run_node("A library.\n\nMistress Vale: she, 45, black dress.\n"
+                               "Owen: he, 42, blue shirt.\n\nMistress Vale shelves a book.\n\n"
+                               "Owen reads at a table.", plan_only=True))
+    check("no shot is spent on the sheet", len(shots) == 2)
+    check("Mistress Vale is described in her shot", "Mistress Vale: she, 45, black dress." in shots[0])
+    check("Owen is described in his", "Owen: he, 42, blue shirt." in shots[1])
+    check("'Both women: tired' is still not a sheet line",
+          not S.is_character_sheet("Both women: tired"))
+
+
+def test_one_person_under_two_names_is_described_once():
+    """"Maya Brooks" in character_memory and "Maya:" in the prompt were two keys, so
+    one woman went into every shot twice, in two different outfits."""
+    print("\n=== one person under two forms of her name is described once ===")
+    result = run_node("Maya: she, 38, red coat.\n\nA park.\n\nMaya sits on a bench.",
+                      character_memory="Maya Brooks: she, 38, green sweater.", plan_only=True)
+    shots = _shots_of(result)
+    check("one entry for her", all(sh.count("she, 38") == 1 for sh in shots))
+    check("character_memory's entry is the one kept", all("green sweater" in sh and "red coat" not in sh
+                                                          for sh in shots))
+    check("...and the author is told", any(isinstance(part, str) and "described more than once" in part
+                                           for part in result))
+    # Control: a shared word with a different age is somebody else.
+    shots = _shots_of(run_node("A garden.\n\nMay: she, 24, yellow dress.\n\nMay and Aunt May pick apples.",
+                               character_memory="Aunt May: she, 60, grey cardigan.", plan_only=True))
+    check("May and Aunt May stay two people", "May: she, 24" in shots[-1]
+          and "Aunt May: she, 60" in shots[-1] and "two people" in shots[-1])
+
+
+def test_a_bare_chest_belongs_to_whoever_undressed():
+    """Two entries listing a sweater: the first entry was taken as the wearer, so Lena
+    taking hers off put the bare chest on Maya, still listed in her own sweater."""
+    print("\n=== a bare region goes to the person who undressed, not the first entry ===")
+    shots = _shots_of(run_node("A bedroom.\n\nMaya and Lena talk.\n\nLena takes off her sweater.",
+                               character_memory="Maya: she, 38, green sweater.\n"
+                                                "Lena: she, 30, yellow sweater.", plan_only=True))
+    last = shots[-1]
+    check("the bare chest is Lena's", "Lena's chest" in last)
+    check("...not Maya's", "Maya's chest" not in last)
+    check("Maya keeps her sweater", "Maya: she, 38, green sweater." in last)
+
+
 def main():
     test_independent_adult_arm_actions()
     test_plan()
@@ -7485,6 +7588,11 @@ def main():
     test_a_squat_survives_speech_and_undressing()
     test_what_comes_off_in_the_bathroom_stays_off()
     test_the_thong_comes_off_however_it_is_written()
+    test_the_opening_does_not_name_people_a_shot_leaves_out()
+    test_a_sheet_written_first_is_a_sheet()
+    test_a_two_word_name_makes_a_sheet()
+    test_one_person_under_two_names_is_described_once()
+    test_a_bare_chest_belongs_to_whoever_undressed()
     print()
     if _fails:
         print(f"RESULT: {len(_fails)} FAILURE(S): " + "; ".join(_fails))

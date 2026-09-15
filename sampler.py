@@ -217,9 +217,28 @@ def split_beats(prompt):
     paras = paragraphs(prompt)
     if not paras:
         return "", []
+    # A CHARACTER SHEET WRITTEN FIRST IS NOT THE SCENE. Opening a script with who is
+    # in it is the natural order, and taking that paragraph as the scene stamped the
+    # WHOLE sheet onto every shot as prose: every person described in every shot,
+    # "Owen feeds the ducks." sent with Maya's full description beside it, and none
+    # of the per-shot scoping, the count or the mouth guard run, because the node
+    # believed there was no sheet. Leading sheet paragraphs stay in the beat list,
+    # where pull_character_sheets takes them, and the scene is the first paragraph
+    # that is not one.
+    #
+    # Stricter than is_character_sheet on purpose: every line has to declare a
+    # pronoun or an age, which a person's entry does and "Interior: a kitchen at
+    # night." does not -- that one is a scene heading and stays the scene.
+    lead = []
+    while paras and is_character_sheet(paras[0]) and all(
+            sheet_pronoun(ln) or age_in(ln)
+            for ln in paras[0].splitlines() if ln.strip()):
+        lead.append(paras.pop(0))
+    if not paras:
+        return "", lead
     if len(paras) == 1:
-        return "", paras
-    return paras[0], paras[1:]
+        return "", lead + paras
+    return paras[0], lead + paras[1:]
 
 
 def paragraphs(text):
@@ -229,8 +248,15 @@ def paragraphs(text):
 
 # A line of a character sheet: `Name: attributes`. The directive lines are excluded
 # by name -- they are instructions to this node, not people.
-_SHEET_LINE = re.compile(r"^\s*(?!(?:remove|off|add|wear|wardrobe)\s*:)"
-                         r"[A-Z][\w'’-]{0,24}\s*:\s*\S", re.I)
+#
+# UP TO THREE WORDS, AS sheet_lines READS THEM. This allowed one, so "Mistress Vale:
+# she, 45, black dress." was not a sheet line: the whole sheet paragraph rendered as a
+# shot of its own and every later shot described nobody -- the people the model
+# invented there were not the ones in the first shot. The first word keeps its old
+# case-insensitivity; each extra word has to be capitalised, which keeps
+# "Both women: tired" out, as sheet_lines does.
+_SHEET_LINE = re.compile(r"^\s*(?!(?i:remove|off|add|wear|wardrobe)\s*:)"
+                         r"[A-Za-z][\w'’-]{0,24}(?:\s+[A-Z][\w'’-]{0,24}){0,2}\s*:\s*\S")
 
 
 def is_character_sheet(par):
@@ -871,12 +897,15 @@ def body_of(pronoun, age=0):
 
     NO BODY IS DESCRIBED FOR A DECLARED AGE UNDER 18. Not a softer description -- none,
     and this returns "" so every clause built on it stays silent. An age the author
-    states is the one fact here that is not a guess."""
+    states is the one fact here that is not a guess, and a generator has no business
+    composing anatomy for a child. See also the refusal in _prepare: a script that
+    declares a minor and stages nudity or sex does not render at all."""
     who = {"she": "woman", "he": "man"}.get(str(pronoun or "").strip().lower(), "")
     if not who:
         return ""
     age = int(age or 0)
-    # Allow body descriptions for minors, but breast descriptions are age-appropriate
+    if age and age < ADULT_AGE:
+        return ""
     return f"a {who}'s body" if not age else f"the body of a {who} of {age}"
 
 
@@ -891,7 +920,6 @@ def body_of(pronoun, age=0):
 # because the request was about breasts and a pronoun this file was not given is not a
 # licence to guess an anatomy.
 _FIGURE = (
-    (13, 17, "small and developing, barely noticeable"),
     (18, 24, "grown and firm, sitting high on the chest"),
     (25, 34, "fully grown and full, sitting a little lower than in her early twenties"),
     (35, 44, "full and softer, settled lower with the weight of middle age"),
@@ -903,7 +931,51 @@ _FIGURE = (
 )
 
 
+# A SHEET THAT DECLARES A CHILD AND A SCRIPT THAT STAGES SEX DO NOT RENDER TOGETHER.
+#
+# This file reads an age now, and the age drives anatomy -- see body_of and figure_of,
+# which describe no body at all below ADULT_AGE. That floor is necessary and it is not
+# sufficient: withholding the node's own clauses does nothing about a script whose own
+# words stage nudity or sex, and those words reach the model verbatim. So the two
+# together are refused outright, before anything is sampled.
+#
+# Read off the SHEET for the age, because that is where an author states a person's
+# age, and off the whole script for the staging. Deliberately blunt: no attempt to work
+# out who the nudity is about. A film that declares a minor anywhere and stages this
+# anywhere is refused whole, and a legitimate scene with a child in it -- which this
+# node will render, with no body described for them -- does not contain either.
+_SEXUAL_STAGING = re.compile(
+    r"\b(?:sex|sexual|fucks?|fucking|fucked|intercourse|penetrat\w*|blow\s?job|"
+    r"handjob|masturbat\w*|orgasms?|orgasmic|climax(?:es|ed|ing)?|cums?|cumming|"
+    r"aroused|arousal|horny|erotic\w*|nipples?|genitals?|vagina\w*|penis\w*|"
+    r"cocks?|dicks?|pussy|clit\w*|erections?|foreplay|straddl\w*|"
+    r"topless|bottomless|naked|nude|nudity|undress\w*|strips?\s+(?:off|naked|bare)|"
+    r"moans?|moaning|moaned)\b", re.I)
 
+
+def minor_with_sexual_staging(sheet, script):
+    """A refusal message when a sheet declares a minor and the script stages sex. "" otherwise.
+
+    Both halves required. An age under 18 on its own renders -- children exist in
+    films -- and gets no body described for them by anything here. Sexual staging on
+    its own renders, which is what this node is for."""
+    named = [(n, age_in(ln)) for n, ln in sheet_lines(sheet or "") if n]
+    minors = sorted({n for n, a in named if 0 < a < ADULT_AGE})
+    if not minors:
+        return ""
+    m = _SEXUAL_STAGING.search(str(script or ""))
+    if not m:
+        return ""
+    return (f"REFUSED, and nothing was rendered. The character sheet declares "
+            f"{_join_names(minors)} as under {ADULT_AGE}, and the script stages sexual "
+            f"or nude content -- it contains {m.group(0)!r}. This node will not "
+            f"generate that combination, whichever character the wording is about and "
+            f"whatever was intended by it. Nothing here tried to work out who: a film "
+            f"holding both is refused whole.\n\n"
+            f"If an age is a typo, fix the sheet and run again -- an adult age renders "
+            f"normally. If the character is an adult, state an adult age. A scene with "
+            f"a child in it and no sexual or nude content renders as it always did, "
+            f"and no body is described for them by this node.")
 
 
 def _pron_age(sheet, name):
@@ -921,6 +993,8 @@ def figure_of(pronoun, age=0):
     if str(pronoun or "").strip().lower() != "she":
         return ""
     age = int(age or 0)
+    if age < ADULT_AGE:
+        return ""
     for lo, hi, said in _FIGURE:
         if lo <= age <= hi:
             # THE AGE IS NOT REPEATED HERE. body_of already states it in the same
@@ -1187,13 +1261,35 @@ def merge_sheets(*sources):
     no line repeated. The earlier source wins, so character_memory overrides a sheet
     left in the prompt."""
     seen_names, seen_lines, out, dupes = set(), set(), [], []
+    # ...AND ONE PERSON UNDER TWO FORMS OF THE NAME. "Maya Brooks" in
+    # character_memory and "Maya:" in the prompt matched as two keys, so both entries
+    # went into every shot -- one woman in a green sweater and one in a red coat,
+    # under "There is one person in the shot". A name made of words the other name
+    # already has is the same person, unless the two entries say otherwise: a
+    # different pronoun or a different age is somebody else ("May: she, 24" and
+    # "Aunt May: she, 60").
+    seen_rows = []
+    def _same_person(name, line):
+        words = set(name.lower().split())
+        for other, other_line in seen_rows:
+            theirs = set(other.lower().split())
+            if not (words <= theirs or theirs <= words):
+                continue
+            p1, p2 = sheet_pronoun(line), sheet_pronoun(other_line)
+            a1, a2 = age_in(line), age_in(other_line)
+            if (p1 and p2 and p1 != p2) or (a1 and a2 and a1 != a2):
+                continue
+            return True
+        return False
     for src in sources:
         for name, line in sheet_lines(src):
             key = name.lower() if name else None
-            if key and key in seen_names:
+            if key and (key in seen_names or _same_person(name, line)):
                 if name not in dupes:
                     dupes.append(name)
                 continue
+            if key:
+                seen_rows.append((name, line))
             if line in seen_lines:
                 continue
             if key:
@@ -1230,6 +1326,96 @@ def build_scene(anchor, first_para, character_memory, sheet):
     parts = [(anchor or "").strip(), (first_para or "").strip(),
              (character_memory or "").strip(), (sheet or "").strip()]
     return "\n".join(terminate_lines(p) for p in parts if p)
+
+
+# THE OPENING PARAGRAPH NAMES PEOPLE TOO, AND IT IS IN EVERY SHOT.
+#
+# sheet_for_beat scopes the sheet to the people a beat involves, because "describing
+# EVERYONE in every shot puts everyone in every shot". The anchor and the opening
+# paragraph ride into every shot beside it and were never scoped the same way, so an
+# opening written the ordinary way -- "Maya and Owen wait in a train station." --
+# put both names in a shot the node had cut down to one:
+#
+#     Maya and Owen wait in a train station. Owen checks the departure board.
+#     Owen: he, 42, blue shirt. There is one person in the shot: one body, one face.
+#
+# Two names, one description, one body: the model is told a second person stands
+# there and given nobody to draw but Owen, which is how a character is rendered
+# twice. So a sentence there that names someone NOT in the shot gives up its
+# setting and loses the person; with no setting to give up, it goes.
+# A place that ENCLOSES is preferred over a spot beside a thing: "On the couch in a
+# dark living room." reads as somebody on the couch, where "In a dark living room."
+# is only the room.
+_SETTING_PHRASE = re.compile(
+    r"\b(?:in|inside|outside|at)\s+(?:a|an|the|this|that)\b", re.I)
+_SPOT_PHRASE = re.compile(
+    r"\b(?:on|by|near|beside|under|behind)\s+(?:a|an|the|this|that)\b", re.I)
+_PERSON_WORD = re.compile(r"\b(?:her|his|their|him|them|herself|himself)\b", re.I)
+_LEADING_PRONOUN = re.compile(r"^\s*(?:she|he|they|her|his|their)\b", re.I)
+
+
+def _name_forms(name):
+    """A name as a script writes it: whole, and a two-part name by either part."""
+    forms = {name}
+    parts = [p for p in name.split() if len(p) >= 3 and p[:1].isupper()]
+    if len(parts) > 1:
+        forms.update(parts)
+    return forms
+
+
+def _setting_of(sentence):
+    """Where a sentence happens, without who is there. "" when it names no place.
+
+    From the first "in a / at the / on the ..." to the end of the sentence, so
+    "Maya sits at her desk in an office" gives "In an office" -- "at her desk" is
+    hers, not the room's, and is passed over because it is not "at a" or "at the"."""
+    m = _SETTING_PHRASE.search(sentence or "") or _SPOT_PHRASE.search(sentence or "")
+    if not m:
+        return ""
+    phrase = sentence[m.start():].strip().rstrip(".!?;, ")
+    if not phrase or _PERSON_WORD.search(phrase):
+        return ""
+    return phrase[0].upper() + phrase[1:] + "."
+
+
+def static_for_shot(static, sheet, shot_sheet):
+    """The anchor and opening paragraph for one shot: nobody named who is not in it.
+
+    Names are the sheet's, matched case-sensitively as sheet_for_beat matches them,
+    so "will" is never Will. A sentence that opens on a pronoun straight after one
+    that was cut goes with it -- "Maya sits at her desk. She types." in a shot
+    without Maya leaves no "She" behind to be drawn."""
+    if not (static or "").strip() or not (sheet or "").strip():
+        return static
+    here = {n for n, _ in sheet_lines(shot_sheet or "") if n}
+    absent = set()
+    for name, _ in sheet_lines(sheet):
+        if name and name not in here:
+            absent |= _name_forms(name)
+    for name in here:
+        absent -= _name_forms(name)
+    if not absent:
+        return static
+    named = re.compile(r"(?<![\w'\u2019-])(?:" + "|".join(
+        re.escape(f) for f in sorted(absent, key=len, reverse=True)) + r")(?![\w-])")
+
+    out = []
+    for line in static.split("\n"):
+        kept, cut_last = [], False
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            if not sentence:
+                continue
+            if named.search(sentence) or (cut_last and _LEADING_PRONOUN.match(sentence)):
+                setting = _setting_of(sentence)
+                if setting and not named.search(setting):
+                    kept.append(setting)
+                cut_last = True
+                continue
+            cut_last = False
+            kept.append(sentence)
+        if kept:
+            out.append(" ".join(kept))
+    return "\n".join(out)
 
 
 _QUOTED = re.compile(r'["“][^"”]+["”]')
@@ -8685,9 +8871,11 @@ class H3LongVideos:
         check_vae_wiring(vae, audio_vae)
         # Before anything else reads the script, for the same reason the abort above is
         # here: the answer is a refusal, and a refusal has to happen before work does.
-        _abort = sparse_attention_allocator_abort(model)
-        if _abort:
-            raise RuntimeError(_abort)
+        _refuse = minor_with_sexual_staging(
+            "\n".join([(character_memory or ""), (prompt or "")]), "\n".join(
+                [(prompt or ""), (anchor or ""), (character_memory or "")]))
+        if _refuse:
+            raise RuntimeError(_refuse)
 
         prompt, n_legacy = strip_legacy_fields(prompt)
         if n_legacy:
@@ -8718,8 +8906,9 @@ class H3LongVideos:
         # per-shot question. See film_stages_duress.
         # A DECLARED AGE UNDER 18 GETS NO BODY DESCRIBED FOR IT, and the author is told
         # so rather than left to wonder why one entry reads differently from the rest.
-        # The scene itself renders. What is withheld is this node's own anatomy clauses,
-        # every one of them. See body_of and figure_of.
+        # The scene itself renders: children are in films. What is withheld is this
+        # node's own anatomy clauses, every one of them. See body_of and figure_of, and
+        # minor_with_sexual_staging for the case that does not render at all.
         _minors = sorted({_n for _n, _ln in sheet_lines(sheet)
                           if _n and 0 < age_in(_ln) < ADULT_AGE})
         if _minors:
@@ -9643,8 +9832,10 @@ class H3LongVideos:
             # gone_by maps a token to who took it off. A token nobody is recorded for
             # stays unscoped, which is what keeps every other removal behaving as it did.
             _toks_all = visible + _hidden
-            _scrubbed = ([scrub_removed(terminate_lines(static), _toks_all)]
-                         if static.strip() else [])
+            # Scoped to this shot's people first: see static_for_shot.
+            _static_here = static_for_shot(static, sheet, shot_sheet)
+            _scrubbed = ([scrub_removed(terminate_lines(_static_here), _toks_all)]
+                         if _static_here.strip() else [])
             for _ln in (terminate_lines(shot_sheet).split("\n")
                         if shot_sheet.strip() else []):
                 _m = re.match(r"\s*([A-Za-z][\w'\u2019-]*)\s*:", _ln)
@@ -9767,8 +9958,22 @@ class H3LongVideos:
             # with a second person in the shot the model gives that second removal to
             # him. The action happens twice, once by each of them.
             _who_sheet = shot_sheet if sheet_lines(shot_sheet) else scene
-            _wearer = next((n for n, ln in sheet_lines(_who_sheet)
-                            if n and names_any(ln, toks)), None)
+            # ...AND WHEN TWO ENTRIES LIST THE SAME KIND OF GARMENT, the first entry
+            # was taken. "Lena takes off her sweater" with Maya also in a sweater put
+            # the bare chest on Maya -- "Maya's chest, shoulders and arms are bare
+            # skin" beside Maya's own entry still listing her green sweater, one woman
+            # described both clothed and bare, which is a woman drawn twice. The sheet
+            # stays the answer when it is unambiguous (it is what gets "she asks Dan"
+            # right); a tie goes to whoever the scene state recorded taking it off
+            # this beat, then to whoever the beat names.
+            _listed = [n for n, ln in sheet_lines(_who_sheet)
+                       if n and names_any(ln, toks)]
+            if len(_listed) > 1:
+                _by_state = [w for w, _g in (_ch.get("removed") or []) if w in _listed]
+                _by_beat = engine.names_in(body, _listed)
+                _wearer = (_by_state or _by_beat or _listed)[0]
+            else:
+                _wearer = _listed[0] if _listed else None
             # WHOSE body is bare. Unattributed in a two-person shot this reads as
             # an instruction about everyone on screen, and the second character
             # undresses alongside the first. Done HERE because _wearer is what
