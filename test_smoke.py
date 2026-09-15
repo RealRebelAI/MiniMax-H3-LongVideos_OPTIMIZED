@@ -310,22 +310,22 @@ def test_a_room_change_with_no_walk_is_a_cut():
          "McKenna sits on the sofa in the living room.")
     info = run_node(P, plan_only=True, character_memory=mem)[2]
     check("the shot that jumps rooms is cut, and only it",
-          "shot(s) 4 START FRESH" in info, info[:160])
+          "shot(s) 4 CUT, because" in info, info[:160])
     # A WALK IS NOT THIS: a travel beat opens in the room it is leaving.
     walk = run_node("A flat.\n\nMcKenna walks from the bedroom to the hallway.\n\n"
                     "McKenna walks from the hallway to the kitchen.",
                     plan_only=True, character_memory=mem)[2]
-    check("a journey keeps its keyframe", "START FRESH" not in walk, "")
+    check("a journey keeps its keyframe", "OPEN IN A DIFFERENT ROOM" not in walk, "")
     # ...but a journey starting somewhere the last shot did not end is still a cut.
     jump = run_node("A flat.\n\nMcKenna is in the kitchen.\n\n"
                     "McKenna walks from the bedroom to the bathroom.",
                     plan_only=True, character_memory=mem)[2]
     check("a walk whose origin is not where we were is a cut",
-          "START FRESH" in jump, jump[:160])
+          "OPEN IN A DIFFERENT ROOM" in jump, jump[:160])
     one = run_node("A kitchen with a white table.\n\nMcKenna fills the kettle.\n\n"
                    "McKenna sits down.", plan_only=True, character_memory=mem)[2]
     check("a one-room script is untouched",
-          "START FRESH" not in one and "never describes" not in one, "")
+          "OPEN IN A DIFFERENT ROOM" not in one and "never describes" not in one, "")
     # A room the prompt never describes is a room the model invents -- say so.
     check("an undescribed room is reported",
           "never describes" in info and "living room" in info, "")
@@ -1973,6 +1973,47 @@ def test_dan_is_not_instantiated_twice():
     solo = _shots("In a home, Dan is in the kitchen.", character_memory=mem)[0]
     check("the constraint does not invent Crystal in a solo shot",
           "two people in the shot" not in solo, solo)
+
+
+def test_a_cut_carries_the_people_across():
+    """REPORTED: shots cutting to a new scene, breaking character continuity.
+
+    A shot after a removal, and a shot opening in another room, dropped the previous
+    frame and carried NO picture at all: room, faces, hair and clothes were all
+    re-imagined from the text. The frame now rides as a claimed reference instead."""
+    print("\n=== a cut carries the people across as a reference ===")
+    mem = "Maya: she, 30, green sweater, grey jeans.\nOwen: he, 34, blue shirt."
+    P = ("A living room.\n\nMaya and Owen sit on the couch.\n\nMaya takes off her sweater.\n\n"
+         "Owen laughs.")
+    rows = _encoded_refs(P, character_memory=mem)
+    info = run_node(P, character_memory=mem)[2]
+    check("the shot after a removal carries the frame as a reference",
+          [n for _, n in rows] == [0, 0, 1], str([n for _, n in rows]))
+    check("...claimed as the room, with everyone still in it",
+          "<Picture 1> is this room a moment earlier" in rows[2][0]
+          and "Maya and Owen are the people there" in rows[2][0], rows[2][0][-220:])
+    check("...and the run says so", "shot 3 (something came off in the shot before)" in info)
+    check("...and it is not a fresh start", "start fresh" not in info)
+
+    P = "A house.\n\nMaya stands in the hallway.\n\nIn the bedroom, Maya sits on the bed."
+    rows = _encoded_refs(P, character_memory=mem)
+    check("a cut to another room carries her as a reference",
+          [n for _, n in rows] == [0, 1], str([n for _, n in rows]))
+    check("...claimed as the person, naming both rooms",
+          "<Picture 1> is Maya a moment earlier, in the hallway" in rows[1][0]
+          and "This shot is in the bedroom." in rows[1][0], rows[1][0][-200:])
+
+    # Somebody left behind in the hallway is not in the bedroom to be claimed.
+    rows = _encoded_refs("A house.\n\nMaya and Owen stand in the hallway.\n\n"
+                         "In the bedroom, Maya sits on the bed.", character_memory=mem)
+    check("...but not with somebody left behind in it", rows[1][1] == 0, str(rows[1][1]))
+
+    # A face captured before a change of clothes is a picture of the old clothes.
+    P = ("A kitchen.\n\nMaya reads.\n\nMaya takes off her sweater and walks out of the kitchen."
+         "\n\nOwen cooks.\n\nMaya comes back in.")
+    info = run_node(P, character_memory=mem)[2]
+    check("a face from before a change of clothes is not recovered",
+          "back after a shot away" in info and "recovered a face" not in info, info[-300:])
 
 
 def test_somebody_still_in_the_frame_is_not_back():
@@ -3886,15 +3927,17 @@ def test_script_is_what_was_sent():
     # be under investigation, the model got "Dom: <Picture 1>, he, 41" and script
     # said "Dom: he, 41". Diagnosing a duplicate from that leads to the wrong fix.
     mem = "Mara: <Picture 1>, she, 30, red coat.\nDom: he, 41, grey jacket."
-    P = ("Daylight. A yard.\n\nDom stands by the gate.\n\n"
-         "Mara walks along the fence.\n\nDom looks at the sky.")
+    # Dom LEAVES: a person a beat merely stops mentioning is still in the frame, and
+    # somebody still in the frame is not back after a shot away.
+    P = ("Daylight. A yard.\n\nDom stands by the gate.\n\nDom walks out through the gate.\n\n"
+         "Mara walks along the fence.\n\nDom comes back and looks at the sky.")
     sent, script = _prompts_sent(P, character_memory=mem,
                                  ref_image_1=torch.rand(1, H, W, 3))
     rep = [b.split("] ", 1)[1].strip() for b in script.split("\n---\n")]
     check("every shot matches, claim included",
           all(s.strip() == r for (s, _), r in zip(sent, rep)), "")
     check("the recovery shot really does carry a claim",
-          "<Picture 1>" in sent[2][0] and "<Picture 1>" in rep[2], "")
+          "<Picture 1>" in sent[3][0] and "<Picture 1>" in rep[3], sent[3][0][-200:])
 
 
 def test_every_reference_is_claimed():
@@ -3907,8 +3950,8 @@ def test_every_reference_is_claimed():
     img = lambda: torch.rand(1, H, W, 3)
     cases = [
         ("one tagged, one untagged returning",
-         "A yard.\n\nDom stands by the gate.\n\nMara walks along the fence.\n\n"
-         "Dom looks at the sky.",
+         "A yard.\n\nDom stands by the gate.\n\nDom walks out through the gate.\n\n"
+         "Mara walks along the fence.\n\nDom comes back and looks at the sky.",
          dict(character_memory="Mara: <Picture 1>, she, 30, red coat.\nDom: he, 41.",
               ref_image_1=img())),
         ("two people, two tagged references",
@@ -3925,8 +3968,10 @@ def test_every_reference_is_claimed():
                                "Dom: he, 41.",
               ref_image_1=img(), ref_image_2=img())),
     ]
+    # Counted at the ENCODER: a frame carried as a reference is added inside
+    # build_conditioning, so counting what is handed to it misses exactly that picture.
     for name, P, kw in cases:
-        sent, _ = _prompts_sent(P, **kw)
+        sent = _encoded_refs(P, **kw)
         bad = []
         for i, (p, n) in enumerate(sent, 1):
             tags = sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)})
@@ -4193,14 +4238,29 @@ def test_introducing_somebody_already_in_position():
     check("...and who is already in place", "Dan is in this room too" in _s2)
     check("...without the claim that nobody new joins",
           "joined by anybody new" not in _s2)
-    # NOT claimable: somebody in that frame is absent from this shot, so the picture
-    # would carry a person the prompt cannot account for. The old fresh start stands.
-    _info3 = run_node(
+    # Somebody in that frame the beat does not name is STILL IN THE ROOM. The frame
+    # used to be dropped for them -- a cut to a re-imagined room, with Nora gone from
+    # it. Now the claim accounts for her.
+    _run3 = run_node(
         "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
         "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
-        character_memory=mem + "\nAda: 29, she, short hair")[2]
-    check("an unaccountable person in the frame keeps the fresh start",
-          "carries the previous frame as a REFERENCE" not in _info3)
+        character_memory=mem + "\nAda: 29, she, short hair")
+    _s3 = re.split(r"\[Shot ", _run3[3])[2]
+    check("somebody the beat does not name keeps the frame carried",
+          "carries the previous frame as a REFERENCE" in _run3[2])
+    check("...claimed with everyone in it", "Nora and Ada are the people there" in _s3,
+          _s3[-220:])
+    check("...and counted", "There is one person" not in _s3
+          and "There are two people" not in _s3, _s3[-220:])
+    # NOT claimable: somebody in that frame has a portrait riding this shot, so the
+    # frame would be a second picture of her. The old fresh start stands.
+    _info4 = run_node(
+        "Nora and Ada set a toolbox on the bench.\n\nDan is already sitting on the "
+        "crate, watching Ada.\n\nAda picks up the spanner.", anchor="A workshop.",
+        character_memory=mem + "\nAda: <Picture 1>, 29, she, short hair",
+        ref_image_1=torch.rand(1, H, W, 3))[2]
+    check("a portrait in the frame keeps the fresh start",
+          "carries the previous frame as a REFERENCE" not in _info4)
     # Arriving is what the chain is FOR: he walks in from the frame before.
     n_arrive, info2 = encodes("Dan walks in through the side door and looks at her.")
     check("an arriving introduction keeps the chain", n_arrive == 2, str(n_arrive))
@@ -7460,7 +7520,9 @@ def test_a_sheet_written_first_is_a_sheet():
                                plan_only=True))
     check("the sheet is not a shot of its own", len(shots) == 2)
     check("Owen's shot does not describe Maya", "Maya:" not in shots[1] and "Owen:" in shots[1])
-    check("...and counts one person", "There is one person in the shot" in shots[1])
+    # Maya is still on the bench: counted, not described.
+    check("...and counts Maya, who is still there", "There are two people in the shot" in shots[1],
+          shots[1][-160:])
     check("the park is still the scene", all(sh.startswith("A park.") for sh in shots))
     # Control: a heading with a colon is not a person and stays the scene.
     shots = _shots_of(run_node("Interior: a kitchen at night.\n\nMaya: she, 38, green sweater.\n\n"
@@ -7832,6 +7894,7 @@ def main():
     test_a_two_word_sheet_name_does_not_duplicate_her()
     test_dan_is_not_instantiated_twice()
     test_somebody_still_in_the_frame_is_not_back()
+    test_a_cut_carries_the_people_across()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()

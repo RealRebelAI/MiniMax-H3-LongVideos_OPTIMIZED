@@ -3185,8 +3185,8 @@ def detail_report(per_shot):
                  f"decodes a shot, takes its LAST frame and re-encodes it as the next "
                  f"shot's keyframe, so the loss of one round trip is carried into the "
                  f"next and compounds. Break the chain to stop it accumulating: "
-                 f"restart_after_removal starts a shot from the text instead of the "
-                 f"previous frame, at the cost of a visible cut there")
+                 f"restart_after_removal stops a shot opening on the previous frame, "
+                 f"at the cost of a cut there")
     elif drop <= -10.0:
         line += (f" -- UP {-drop:.0f}%. Read the contrast line before taking that as good "
                  f"news: expanding contrast raises this number too")
@@ -7167,6 +7167,21 @@ def room_claim(n, present, joining):
     return said
 
 
+def carried_people_claim(n, present, was_room="", now_room=""):
+    """Claim the previous frame carried as a reference across a cut to another room.
+
+    The people come with it and the room does not. Naming both rooms is what keeps
+    the picture from pulling the old walls in: it says where the picture was taken
+    and where this shot is."""
+    who = _join_names(present)
+    said = (f" <Picture {n}> is {who} a moment earlier"
+            f"{f', in the {was_room}' if was_room else ''}: the same "
+            f"{'faces, hair and clothes' if len(present) > 1 else 'face, hair and clothes'}.")
+    if now_room:
+        said += f" This shot is in the {now_room}."
+    return said
+
+
 def returning_room_claim(n, room, present, arriving):
     """Claim a frame of a room the film showed before and has come back to.
 
@@ -8654,8 +8669,8 @@ class H3LongVideos:
                                "'remove:' line still works and is added to whatever is "
                                "inferred."}),
                 "restart_after_removal": ("BOOLEAN", {"default": True,
-                    "tooltip": "After a shot with a 'remove:', start the NEXT shot fresh "
-                               "instead of continuing from that shot's last frame.\n\n"
+                    "tooltip": "After a shot that takes something off, the NEXT shot does "
+                               "not open on that shot's last frame.\n\n"
                                "Every shot is anchored to the previous shot's last frame. If "
                                "the model does not finish taking the garment off inside its "
                                "own shot, that frame still shows it -- and a keyframe is a "
@@ -8663,9 +8678,12 @@ class H3LongVideos:
                                "later shot inherits it too, with no wording able to undo it. "
                                "This breaks that inheritance at the one boundary where the "
                                "state changes.\n\n"
-                               "The cost is a visible cut there, and that shot re-deriving its "
-                               "pose and framing from the text. Turn it off if your removals do "
-                               "complete on screen and you would rather keep the continuity."}),
+                               "The frame still rides as a REFERENCE, so the room, the faces "
+                               "and the clothes carry across; only when nobody is left in it, or "
+                               "somebody in it also has a portrait riding the next shot, is "
+                               "nothing carried. The cost is a cut there, with that shot re-deriving its "
+                               "pose and framing. Turn it off if your removals do complete on "
+                               "screen and you would rather keep the continuity."}),
                 "hold_restraints": ("BOOLEAN", {"default": True,
                     "tooltip": "Once a restraint is put on, keep it whole. From the shot "
                                "that applies it onward, every shot carries one sentence: "
@@ -9534,7 +9552,7 @@ class H3LongVideos:
         _seen_before = set()        # everyone a shot has described so far
         _returns = []               # (shot, names back after a shot away)
         _in_frame = []              # who the previous shot's last frame shows, described or not
-        shot_frames = {}            # 0-based shot -> (who its frames show, who its last frame shows)
+        shot_frames = {}            # 0-based shot -> (who its frames show, who is still there at its end)
         reentry_shots = {}          # 0-based shot -> who walks in while the keyframe still has them
         _placed_shots = {}          # 0-based shot -> who it introduces in position
         # WHOSE FACE IS ALREADY COVERED BY A PICTURE OF THEIR OWN. A sheet line
@@ -10552,13 +10570,16 @@ class H3LongVideos:
             # from: they stay in it until a beat walks them out, the camera goes to a
             # room they are not in, or the chain breaks. Read by the render wherever a
             # frame is used as a picture of the people in it. See _EXIT.
+            # The render's own fresh starts: after a removal, or for somebody introduced
+            # in position, the frame before rides as a reference unless it cannot.
+            _prev_stays = shot_frames.get(len(plan) - 1, ([], []))[1]
+            _no_carry = not _cond_module.may_carry_frame(
+                _prev_stays, active,
+                {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)})
             _fresh = (len(plan) in cut_shots
-                      or (restart_after_removal and (len(plan) - 1) in stripped_shots)
-                      # The render's own fresh start for somebody introduced in position
-                      # when the frame before cannot ride as a reference.
-                      or (len(plan) in _placed_shots and not _cond_module.may_carry_room(
-                          shot_frames.get(len(plan) - 1, ([], []))[1], active,
-                          {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}))
+                      or (restart_after_removal and (len(plan) - 1) in stripped_shots
+                          and _no_carry)
+                      or (len(plan) in _placed_shots and _no_carry)
                       or bool(_ALONE.search(engine.staged_text(body))))
             _kept = [] if _fresh else list(_in_frame)
             # SOMEBODY STILL IN THE FRAME, STAGED WALKING IN. "Dan sits at the table",
@@ -10578,7 +10599,7 @@ class H3LongVideos:
             _shows = list(active) + _carry
             # A walk to another room leaves behind whoever it does not describe.
             _ends_with = list(active) + ([] if (_to and _to != _room_before) else _carry)
-            shot_frames[len(plan)] = (_shows, _ends_with)
+
             # BACK AFTER A SHOT AWAY means not in the keyframe -- not merely undescribed
             # in the shot before. Dan sitting at the table through "Crystal laughs" is
             # still in the frame "Dan smiles" opens on, and a recovered picture of him
@@ -10588,6 +10609,7 @@ class H3LongVideos:
                 _returns.append((len(plan) + 1, list(_back)))
             _gone = leaves_in(body, sheet, _shows)
             _in_frame = [n for n in _ends_with if n not in _gone]
+            shot_frames[len(plan)] = (_shows, list(_in_frame))
             if here and here not in _described_rooms and here not in _undescribed:
                 _undescribed.append(here)
             # ...and say so on later shots, because the scene paragraph still
@@ -11645,14 +11667,15 @@ class H3LongVideos:
                 f"keeps its keyframe")
         if cut_shots:
             notes.append(
-                f"shot(s) {', '.join(str(n + 1) for n in sorted(cut_shots))} START FRESH, "
-                f"because they OPEN IN A DIFFERENT ROOM from the one the shot before ended "
-                f"in. Every shot is anchored to the previous shot's last frame, and a "
-                f"keyframe is a PICTURE, which outvotes any sentence -- so a living-room shot "
-                f"opening on a frame of the kitchen renders neither of them, it renders a "
-                f"blend, and a kitchen blended with the words 'living room' is a bathroom: "
-                f"tiles, a sink, cabinets. Breaking the chain costs a cut exactly where a cut "
-                f"belongs, which is the same trade restart_after_removal makes. A WALK IS NOT "
+                f"shot(s) {', '.join(str(n + 1) for n in sorted(cut_shots))} CUT, because "
+                f"they OPEN IN A DIFFERENT ROOM from the one the shot before ended in. Every "
+                f"shot is anchored to the previous shot's last frame, and a keyframe is a "
+                f"PICTURE, which outvotes any sentence -- so a living-room shot opening on a "
+                f"frame of the kitchen renders neither of them, it renders a blend, and a "
+                f"kitchen blended with the words 'living room' is a bathroom: tiles, a sink, "
+                f"cabinets. So that frame is not frame one there. It still rides as a "
+                f"reference for the PEOPLE in it wherever all of them are in the new shot, so "
+                f"they keep their faces and clothes across the cut. A WALK IS NOT "
                 f"THIS: a travel beat opens in the room it is leaving, so that frame is the "
                 f"right one and the shot keeps its keyframe -- write the move as a journey "
                 f"('she walks through to the kitchen') and you get the walk instead of a cut")
@@ -12838,6 +12861,8 @@ class H3LongVideos:
         av_fix = 0                  # samples of A/V drift corrected across the chain
         _captured = {}              # name -> a frame from the last shot they were in
         _captured_from = {}         # name -> which shot that frame came from
+        _captured_gen = {}          # name -> the wardrobe generation that frame shows
+        _soft_cuts = []             # (shot, why) cuts that carried the frame as a reference
         _recovered = []             # (shot, name, source shot) actually pinned
         _room_frames = {}           # room -> [(last frame there, who was in it, wardrobe generation, shot)], newest first
         _room_returns = []          # (shot, room, source shot) actually carried
@@ -12871,13 +12896,48 @@ class H3LongVideos:
             # cut exactly where a cut belongs.
             shot_handoff = handoff
             _handoff_ref = False
+            # NEITHER CUT THROWS THE FRAME AWAY ANY MORE. Dropping it left the shot
+            # with no picture of anything: the room, the faces, the hair and whatever
+            # everybody still wears were all re-imagined from the text, which is a
+            # new scene with new people in it. Reported as shots cutting to a new
+            # scene and breaking character continuity.
+            #
+            # The frame is DEMOTED instead, the way _placed_shots demotes it: a
+            # reference supplies appearance without being frame one, so a garment the
+            # model left half off is not pinned into the opening frame, and a room
+            # change is not blended into the new room -- while who these people are
+            # and what they look like carries across. Only when it is safe: everybody
+            # in that frame is in this shot and none has a portrait of their own,
+            # because a picture of somebody the text does not account for is another
+            # person. Otherwise the old fresh start stands.
+            _prev_people = _frame_cast(i - 1, last=True) if i else []
+            # Into ANOTHER room, only people who are all in this shot: the ones left
+            # behind are not here to be claimed. In the same room everybody still in it
+            # is claimed, described or not.
+            _carry_ok = bool(i and handoff is not None and i not in reentry_shots
+                             and (_cond_module.may_carry_room if i in cut_shots
+                                  else _cond_module.may_carry_frame)(
+                                 _prev_people, plan.shots[i].cast, _tagged_names))
+            _carry_rooms = None
             if restart_after_removal and (i - 1) in stripped_shots:
-                shot_handoff = None
-                fresh.append(i + 1)
+                if _carry_ok:
+                    _handoff_ref = True
+                    _carry_rooms = (shot_rooms.get(i - 1, ("", ""))[1],
+                                    shot_rooms.get(i, ("", ""))[0])
+                    _soft_cuts.append((i + 1, "removal"))
+                else:
+                    shot_handoff = None
+                    fresh.append(i + 1)
             # ...and so does a shot that OPENS IN A DIFFERENT ROOM. Before the
             # _placed_shots branch on purpose: that one DEMOTES the frame to a
             # reference claiming "this room a moment earlier", which is a lie when the
-            # room has changed. See cut_shots.
+            # room has changed -- so this one claims the PEOPLE and names both rooms.
+            # See cut_shots.
+            elif i in cut_shots and _carry_ok:
+                _handoff_ref = True
+                _carry_rooms = (shot_rooms.get(i - 1, ("", ""))[1],
+                                shot_rooms.get(i, ("", ""))[0])
+                _soft_cuts.append((i + 1, "room"))
             elif i in cut_shots or i in reentry_shots:
                 shot_handoff = None
             # SHOT 1'S first_frame, READ AS THE SET. Same answer as the branch below
@@ -12909,10 +12969,14 @@ class H3LongVideos:
             # already there without being frame one, so the newcomer is simply in
             # place instead of walking in from nowhere.
             #
-            # Only when everybody in that frame is named in this shot. The picture
-            # contains whoever was on screen when it was taken, and one the prompt
-            # cannot account for is the node's oldest bug: a picture nobody claims is
-            # another person. When it cannot be claimed, the old fresh start stands.
+            # Only when everybody in that frame can be CLAIMED. The picture contains
+            # whoever was on screen when it was taken, and one the prompt cannot
+            # account for is the node's oldest bug: a picture nobody claims is another
+            # person. The claim names all of them -- described in this shot or not,
+            # they are still in this room, and the count says so too (see
+            # shot_frames). It used to demand that the beat name every one of them,
+            # so "Crystal reads by the window" after a shot of Dan dropped the frame:
+            # the room was re-imagined and Dan vanished from it.
             elif i in _placed_shots:
                 _was_here = _frame_cast(i - 1, last=True)
                 _here_now = plan.shots[i].cast
@@ -12927,7 +12991,7 @@ class H3LongVideos:
                 #
                 # The room is lost on those shots, back to the fresh start it was
                 # before. A re-imagined set is a smaller bug than a second person.
-                if _cond_module.may_carry_room(_was_here, _here_now, _tagged_names):
+                if _cond_module.may_carry_frame(_was_here, _here_now, _tagged_names):
                     _handoff_ref = True
                     _carried.append((i + 1, list(_was_here),
                                      list(_placed_shots[i])))
@@ -12953,8 +13017,15 @@ class H3LongVideos:
             _extra = []
             _cast = plan.shots[i].cast
             _returning = {w for n, ws in _returns if n == i + 1 for w in ws}
+            # ...and only a frame of what they wear NOW. A face captured before
+            # anybody changed clothes is a picture of the old wardrobe, and a
+            # reference puts that back -- the same rule the room frames keep.
             _who = _cond_module.recoverable_subject(
-                _cast, _tagged_names, _returning, _captured)
+                _cast, _tagged_names, _returning,
+                {k: v for k, v in _captured.items()
+                 if _captured_gen.get(k) == _wardrobe_gen})
+            if _who and _carry_rooms is not None and _who in _prev_people:
+                _who = ""               # the carried frame is already a picture of them
             if _who:
                 _extra = [_captured[_who]]
                 _recovered.append((i + 1, _who, _captured_from.get(_who, 0)))
@@ -13016,7 +13087,16 @@ class H3LongVideos:
                             and all(n in _cast_now for n in _in_it)
                             and not any(n in _tagged_names for n in _in_it)
                             and not any(n in _in_keyframe for n in _in_it)
-                            and not (_who and _who in _in_it)):
+                            and not (_who and _who in _in_it)
+                            # With the previous frame carried as a reference, only a
+                            # room frame showing ALL of its people -- which then carries
+                            # the room and them, and replaces it -- or none of them.
+                            and not (_carry_rooms is not None
+                                     and any(n in _prev_people for n in _in_it)
+                                     and not all(n in _in_it for n in _prev_people))):
+                        if _carry_rooms is not None and any(n in _prev_people for n in _in_it):
+                            _handoff_ref, shot_handoff, _carry_rooms = False, None, None
+                            _soft_cuts.pop()
                         _extra.append(_frame)
                         shot_prompt = shot_prompt + returning_room_claim(
                             len(shot.refs) + len(_extra), _back, _in_it, _arriving)
@@ -13026,6 +13106,17 @@ class H3LongVideos:
             if _handoff_ref and _plate_on == i + 1:
                 # A SET, not a room a moment earlier. See plate_claim.
                 shot_prompt = shot_prompt + plate_claim(len(_shot_refs) + 1)
+                _handoff_claimed.append(i + 1)
+            elif _carry_rooms is not None:
+                # A cut that kept its frame as a reference. The same room is "this room
+                # a moment earlier"; another room claims the people and names both.
+                _was_room, _now_room = _carry_rooms
+                if _was_room and _now_room and _was_room != _now_room:
+                    shot_prompt = shot_prompt + carried_people_claim(
+                        len(_shot_refs) + 1, _prev_people, _was_room, _now_room)
+                else:
+                    shot_prompt = shot_prompt + room_claim(len(_shot_refs) + 1,
+                                                           _prev_people, [])
                 _handoff_claimed.append(i + 1)
             elif _handoff_ref:
                 # Carried for the ROOM, with somebody new in the shot -- so the
@@ -13195,6 +13286,7 @@ class H3LongVideos:
                     for _who in plan.shots[i].cast:
                         _captured[_who] = _keep
                         _captured_from[_who] = i + 1
+                        _captured_gen[_who] = _wardrobe_gen
             except Exception:
                 pass                       # a recovered frame is a nicety, not the render
             # The room this shot ENDS in, from its last frame -- the end, because a
@@ -13437,12 +13529,23 @@ class H3LongVideos:
                     f"and join the parts outside the node), a lower megapixels, or a "
                     f"smaller diffusion quant -- every GB of weights is a GB not "
                     f"available to hold the render")
+        if _soft_cuts:
+            notes.append(
+                "carried the previous frame as a REFERENCE across a cut -- "
+                + "; ".join(f"shot {n} ({'something came off in the shot before' if why == 'removal' else 'it opens in another room'})"
+                            for n, why in _soft_cuts)
+                + ". Not as frame one, so a garment left half off is not pinned into the "
+                  "opening and the old room is not blended into a new one, but the faces, "
+                  "hair and clothes come with it instead of being re-imagined from the text")
         if fresh:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in fresh)} start fresh, because the shot "
-                f"before each took something off -- continuing from a frame that may still "
-                f"show the garment is how it comes back, and a picture outvotes the text. "
-                f"That costs a cut there. Turn restart_after_removal off to keep the "
+                f"before each took something off and its last frame could not ride as a "
+                f"reference -- nobody is left in it to claim, or somebody in it has a "
+                f"portrait of their own riding the next shot. Continuing from a frame that "
+                f"may still show the garment is how "
+                f"it comes back, and a picture outvotes the text. That costs a cut there, "
+                f"with nothing carried. Turn restart_after_removal off to keep the "
                 f"continuity instead")
         if _carried:
             notes.append(

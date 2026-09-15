@@ -20,6 +20,20 @@ def may_carry_room(previous_cast, current_cast, tagged_names):
         and not any(name in tagged for name in previous)
 
 
+def may_carry_frame(previous_cast, current_cast, tagged_names):
+    """A previous frame of the SAME room is safe as a reference claimed with everyone in it.
+
+    Unlike may_carry_room, somebody this shot does not describe may be in it: the claim
+    names them, and they are still in that room. Refused only for an empty frame, or
+    one holding somebody whose own portrait also rides this shot -- two pictures of one
+    person is how a second one gets drawn."""
+    previous = [name for name in (previous_cast or ()) if name]
+    current = set(current_cast or ())
+    tagged = set(tagged_names or ())
+    return bool(previous) and not any(name in tagged and name in current
+                                      for name in previous)
+
+
 def recoverable_subject(cast, tagged_names, returning_names, captured):
     """Return the sole safe recovered subject, or an empty string."""
     people = [name for name in (cast or ()) if name]
