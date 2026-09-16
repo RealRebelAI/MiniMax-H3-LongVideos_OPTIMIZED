@@ -4622,7 +4622,13 @@ def test_schema():
     # the VAE clamps the result -- so headroom spent is never returned. It needs a strength,
     # not a switch, because the correction trades flatness against how much of the look it
     # leaves alone, and because 0 has to mean off.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 41)
+    # hold_camera (2026-09-16) answers the camera moving on its own: every shot opens
+    # on the previous shot's last frame, so a shot that drifts hands the drifted
+    # viewpoint forward and the next adds its own -- the room is a different room by
+    # shot four. It needs a switch because a moving camera is a real choice, and the
+    # only other way to stand the clause down is to write camera words into the anchor,
+    # which changes the render.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 42)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4630,12 +4636,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-15:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-16:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
                               "ambient_audio", "ambient_level", "foley_level",
                               "speech_lead_seconds", "speech_tail_seconds",
-                              "beat_leads", "hold_levels"])
+                              "beat_leads", "hold_levels", "hold_camera"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",

@@ -1975,6 +1975,55 @@ def test_dan_is_not_instantiated_twice():
           "two people in the shot" not in solo, solo)
 
 
+def test_the_camera_is_held_where_nothing_places_it():
+    """REPORTED: the camera moves on its own, which breaks continuity and stops the
+    last frame carrying into the next beat.
+
+    Every shot opens on the previous shot's last frame, so a shot that drifts away
+    from the viewpoint it started on hands the drifted one forward and the next shot
+    adds its own. Nothing in the text ever said the camera stays put, and an unstated
+    attribute is left to the model's prior -- which, for a video model, is movement."""
+    print("\n=== the camera is held still where nothing places it ===")
+    said = S.camera_hold("Maya pours tea.")
+    check("a beat that says nothing about the camera gets the hold",
+          "one unbroken take from one position, angle and distance" in said, said)
+    check("...in one short sentence", said.count(".") == 1 and len(said.split()) <= 14,
+          f"{len(said.split())} words")
+    check("...phrased positively, like every other guard here",
+          not re.search(r"\bnot\b|\bnever\b|\bno\b|\bwithout\b", said, re.I), said)
+    # It names no camera: naming one is asking for one, and the lens is what the gaze
+    # guards spend their words getting people to stop looking at.
+    check("...and names no camera", not re.search(r"camera|lens", said, re.I), said)
+    check("a journey keeps its moving camera",
+          S.camera_hold("Maya walks through to the hall.", moving=True) == "")
+    for words in ("The camera pans across to Maya.", "Maya pours tea, handheld.",
+                  "A slow push in as Maya pours tea.", "Close on her hands, rack focus."):
+        check(f"the author's camera wins: {words[:28]!r}", S.camera_hold(words) == "", words)
+    for anchor_text in ("Shot on 35mm, handheld.", "Locked-off camera, warm light.",
+                        "Anamorphic lens, slow dolly."):
+        check(f"...in the anchor too: {anchor_text[:24]!r}",
+              S.camera_hold("Maya pours tea.", anchor_text) == "", anchor_text)
+    check("a plain anchor does not stand it down",
+          S.camera_hold("Maya pours tea.", "A warm kitchen at night.") != "")
+
+    mem = "Maya: she, 30, green sweater.\nOwen: he, 34, blue shirt."
+    P = ("A kitchen with white tiles.\n\nMaya pours tea.\n\nOwen sits at the table.\n\n"
+         "Maya walks through to the living room.\n\nMaya sits on the sofa.")
+    out = run_node(P, character_memory=mem, plan_only=True)
+    shots = _shots_of(out)
+    check("every ordinary shot carries it",
+          all("one unbroken take" in shots[i] for i in (0, 1, 3)), shots[0][-120:])
+    check("...and the travel shot does not",
+          "one unbroken take" not in shots[2], shots[2][-160:])
+    check("...and the run says which shots and why",
+          "shot(s) 1, 2, 4 say nothing about the camera" in str(out[2])
+          and "opens on the PREVIOUS shot's last frame" in str(out[2]), "")
+    off = run_node(P, character_memory=mem, plan_only=True, hold_camera=False)
+    check("off, nothing is said about the camera",
+          "one unbroken take" not in off[3]
+          and "told it HOLDS" not in str(off[2]))
+
+
 def test_a_cut_carries_the_people_across():
     """REPORTED: shots cutting to a new scene, breaking character continuity.
 
@@ -7895,6 +7944,7 @@ def main():
     test_dan_is_not_instantiated_twice()
     test_somebody_still_in_the_frame_is_not_back()
     test_a_cut_carries_the_people_across()
+    test_the_camera_is_held_where_nothing_places_it()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
     test_a_squat_survives_speech_and_undressing()

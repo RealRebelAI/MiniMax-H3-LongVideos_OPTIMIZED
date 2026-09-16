@@ -5762,6 +5762,55 @@ _FRAME_SIZE = re.compile(
     r"\bknees?[-\s]up\b|\bhead\s+to\s+(?:toe|foot|feet)\b", re.I)
 
 
+# THE CAMERA MOVING ON ITS OWN.
+#
+# Reported: the camera wanders -- a drift, a slow push, an orbit nobody asked for --
+# and it breaks the chain. Every shot opens on the previous shot's last frame, so a
+# shot that ends on a viewpoint the shot never started from hands THAT viewpoint on,
+# and the next shot inherits it and adds its own drift. The room is a different room
+# by shot four, from a camera nobody placed.
+#
+# The text never said otherwise. An attribute a prompt does not state is not left to
+# the model, it is left to the model's prior -- and for video that prior is MOTION:
+# a still camera is the one thing a video model has no reason to produce unless the
+# words ask for it. Every other picture guard here exists for the same reason.
+#
+# Silent where the author has said anything about the camera at all, in the beat or
+# in the anchor: their words win, and a pan somebody asked for is not a defect. That
+# includes asking for a still one -- this clause would only agree with it.
+_CAMERA_ASKED = re.compile(
+    r"\bcameras?\b|\blens\b|\bshot\s+on\b|\bpans?\b|\bpanning\b|\btilts?\b|\btilting\b|"
+    r"\bdolly(?:ing)?\b|\btracking\s+shot\b|\btrucks?\s+(?:in|out|left|right)\b|"
+    r"\bzoom(?:s|ing|ed)?\b|\bpush(?:es|ing)?\s+in\b|\bpull(?:s|ing)?\s+(?:back|out)\b|"
+    r"\bcrane\b|\bjib\b|\bsteadicam\b|\bhand-?held\b|\bgimbal\b|\bdrone\b|"
+    r"\borbit(?:s|ing)?\b|\barc(?:s|ing)?\s+around\b|\bcircles?\s+around\b|"
+    r"\bwhip\s+pan\b|\brack\s+focus\b|\bfollow(?:s|ing)?\s+shot\b|\bpov\b|"
+    r"\blocked[-\s]off\b|\bstatic\s+(?:shot|frame|camera)\b|\bcrash\s+zoom\b", re.I)
+
+
+def camera_hold(beat, anchor="", moving=False):
+    """One sentence holding the camera still, where nothing has placed it.
+
+    `moving` stands it down for a shot that travels between places: a journey the
+    node has already asked to keep every step in frame is a shot whose camera has to
+    go with them, and telling it to stay put contradicts the beat."""
+    if moving:
+        return ""
+    if _CAMERA_ASKED.search(str(beat or "")) or _CAMERA_ASKED.search(str(anchor or "")):
+        return ""
+    # IT NAMES NO CAMERA, for the reason the face guard gives: naming one is asking
+    # for one, and the lens is what the gaze guards spend their words getting people
+    # to stop looking at. A TAKE is the same fact from the other side -- one position
+    # for the length of the shot -- and it says the other half of what was reported
+    # too: no cut inside the shot.
+    #
+    # SHORT, and positive. Every clause competes for the same per-shot budget, so a
+    # long one evicts the body count or the gaze on a brief beat; and a guard says
+    # what IS, never what is not, because a bag of words at cfg 1 drops the "not"
+    # and keeps the verb it negates.
+    return " The shot is one unbroken take from one position, angle and distance."
+
+
 def frame_hold(beat, anchor="", people=1):
     """Say the frame holds a whole body, where nothing else says what the frame is.
 
@@ -8995,6 +9044,31 @@ class H3LongVideos:
                                "it still says UP, raise this. It cannot undo clipping that "
                                "earlier shots already baked in, and it corrects levels "
                                "only -- not softening, and nothing spatial."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "hold_camera": ("BOOLEAN", {"default": True,
+                    "tooltip": "Say the camera does not move, on every shot that does not "
+                               "ask it to.\n\n"
+                               "Reported as the camera moving on its own and breaking "
+                               "continuity, and it is the chain that makes it expensive: "
+                               "every shot opens on the PREVIOUS shot's last frame, so a "
+                               "shot that drifts away from the viewpoint it started on "
+                               "hands the drifted one forward. The next shot inherits it "
+                               "and adds its own, and by shot four the room is a room "
+                               "nobody framed.\n\n"
+                               "An attribute the text does not state is left to the "
+                               "model's prior, and for a video model that prior is "
+                               "movement: a still camera is the one thing it has no reason "
+                               "to produce unless the words ask. So one sentence asks: "
+                               "one unbroken take, from one position, angle and distance. "
+                               "It names no camera -- naming one is asking for one, and the "
+                               "lens is what the gaze guards are trying to get people to "
+                               "stop looking at -- and a take is the same fact from the "
+                               "other side, which also says no cut inside the shot.\n\n"
+                               "YOUR WORDS WIN. Any camera note in the beat or the anchor "
+                               "-- a pan, a push in, handheld, a lens, 'shot on' -- stands "
+                               "it down for that shot, and a journey between places keeps "
+                               "its moving camera, because the node has already asked for "
+                               "every step of it in frame."}),
             },
         }
 
@@ -9022,7 +9096,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
-            hold_levels=0.8,
+            hold_levels=0.8, hold_camera=True,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -9056,7 +9130,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
             speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
-            hold_levels=hold_levels,
+            hold_levels=hold_levels, hold_camera=hold_camera,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             try:
@@ -9088,7 +9162,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
-            hold_levels=0.8,
+            hold_levels=0.8, hold_camera=True,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -9466,6 +9540,7 @@ class H3LongVideos:
         _undescribed = []           # rooms the film enters that the prompt never describes
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
+        camera_shots = []           # shots told the camera holds still
         contact_shots = []          # shots told which body is with which
         led_shots = []              # shots whose beat was put ahead of the sheet
         restarted = []              # shots started fresh after a removal
@@ -11012,6 +11087,12 @@ class H3LongVideos:
             _frame = frame_hold(body, anchor, len(_described or []) or 1)
             if _frame:
                 frame_shots.append(len(plan) + 1)
+            # ...and where the camera IS, which nothing said either. A travel beat
+            # keeps its moving camera: the node has already asked for every step of
+            # the journey in frame. See camera_hold.
+            _camera = camera_hold(body, anchor, moving=bool(_travel)) if hold_camera else ""
+            if _camera:
+                camera_shots.append(len(plan) + 1)
             # ONE sentence for the hardware. The hold, the name of the thing and
             # where it holds were three separate clauses written for three separate
             # reports, each naming the same object again -- 53 words about one pair
@@ -11422,6 +11503,13 @@ class H3LongVideos:
                 # own words imply: it is a guess about the camera, and the camera is
                 # the author's to state. See frame_hold.
                 (15, "frame", _frame),
+                # THE CAMERA STAYING PUT. An inference like the frame above it, and
+                # ranked above it, because this one does not stop at its own shot: the
+                # next shot opens on whatever viewpoint this one drifts to, so a
+                # dropped clause here is inherited by every shot after it. Still below
+                # anything the author's words imply, and silent the moment they say
+                # anything about the camera at all.
+                (13, "camera", _camera),
                 (6, "told", _told),          # a listener given an order to ignore
                 (13, "turn", turn),
                 # LAST in the list, and last in the ranking of anything the author's
@@ -11705,6 +11793,19 @@ class H3LongVideos:
                 f"only -- a beat that pairs nobody by name ('they kiss') gets nothing, "
                 f"because guessing which two is the bug. With two people in the shot "
                 f"nothing is said: there is nobody else to pair with")
+        if camera_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in camera_shots)} say nothing about the "
+                f"camera, so each is told it is one unbroken TAKE from one position, angle "
+                f"and distance. "
+                f"Reported as the camera moving on its own and breaking continuity -- and "
+                f"the chain is what makes that expensive, because every shot opens on the "
+                f"PREVIOUS shot's last frame. A shot that drifts hands the drifted "
+                f"viewpoint on, the next adds its own, and the room stops being the room. "
+                f"An unstated attribute is left to the model's prior, and for a video model "
+                f"that prior is movement. Your words always win: any camera note in the "
+                f"beat or the anchor stands it down there, and a journey between places "
+                f"keeps its moving camera. Off with hold_camera")
         if frame_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in frame_shots)} stage something a "
