@@ -4628,7 +4628,11 @@ def test_schema():
     # shot four. It needs a switch because a moving camera is a real choice, and the
     # only other way to stand the clause down is to write camera words into the anchor,
     # which changes the render.
-    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 42)
+    # verbatim (2026-09-16) answers "I want what I write sent and nothing else": it
+    # sends the scene, the beat and the sheet and drops every clause this file writes.
+    # A switch rather than a mode, because what it turns off is every fix above it --
+    # its value is proving whether a fault is the node's doing or the model's.
+    check(f"the node stays small: {n_widgets} widgets", n_widgets <= 43)
     # Present, and in the order they were ADDED -- saved workflows restore widget
     # values by position with no names stored, so a widget inserted above an
     # existing one shifts every later value in every workflow already saved. New
@@ -4636,12 +4640,12 @@ def test_schema():
     for _w in ("anchor", "character_memory", "character_guard"):
         check(f"{_w} is offered", _w in opt)
     check("...and they sit at the end, in the order they were added",
-          list(opt)[-16:] == ["anchor", "character_memory", "character_guard",
+          list(opt)[-17:] == ["anchor", "character_memory", "character_guard",
                               "pace", "auto_sound", "hold_scene_state",
                               "mouths_shut_when_no_line", "hold_gaze",
                               "ambient_audio", "ambient_level", "foley_level",
                               "speech_lead_seconds", "speech_tail_seconds",
-                              "beat_leads", "hold_levels", "hold_camera"])
+                              "beat_leads", "hold_levels", "hold_camera", "verbatim"])
     check("hold_gaze is offered, and on",
           "hold_gaze" in opt and opt["hold_gaze"][1]["default"] is True)
     check("mouths_shut_when_no_line is offered, and on",

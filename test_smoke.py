@@ -2024,6 +2024,116 @@ def test_the_camera_is_held_where_nothing_places_it():
           and "told it HOLDS" not in str(off[2]))
 
 
+def test_verbatim_sends_your_text_and_nothing_else():
+    """"This should be automatically verbatim, so the node has no room to invent."
+
+    On, a shot is the author's scene, the author's beat and the sheet entries for the
+    people it names. Every clause this file writes is left out -- and every failure
+    each one answers comes back, which is why it is a switch and not the default."""
+    print("\n=== verbatim sends your text and nothing else ===")
+    mem = "Ana: she, 29, grey jacket.\nMara: she, 41, navy uniform."
+    P = ("A depot at night.\n\nMara walks Ana to the entrance.\n\n"
+         "Ana stops at the door and says: \"Wait.\"")
+    plain = _shots_of(run_node(P, plan_only=True, character_memory=mem))
+    out = run_node(P, plan_only=True, character_memory=mem, verbatim=True)
+    bare = _shots_of(out)
+    check("the beat is still there, word for word",
+          "Mara walks Ana to the entrance." in bare[0], bare[0])
+    check("...with the scene and the sheet entries for who it names",
+          bare[0].startswith("A depot at night.") and "Ana: she, 29" in bare[0]
+          and "Mara: she, 41" in bare[0], bare[0])
+    check("...and the scoping still holds: nobody the beat left out",
+          "Mara: she, 41" not in bare[1], bare[1])
+    for what in ("people in the shot", "one body", "unbroken take", "Mouths in the shot",
+                 "the eyes and the head", "first frame"):
+        check(f"no clause the node writes: {what!r}", what not in " ".join(bare),
+              " ".join(bare)[:160])
+    check("the same script un-switched has them", "people in the shot" in plain[0])
+    check("dialogue is still marked for H3", "<d>Wait.</d>" in bare[1], bare[1])
+    check("the run says verbatim is on", "VERBATIM is on" in str(out[2]), "")
+    check("...first, ahead of the notes describing clauses it did not send",
+          str(out[2]).index("VERBATIM is on") < str(out[2]).index("prompt balance"), "")
+    check("...and those notes are still reported",
+          "say nothing about the camera" in str(out[2]), "")
+    # An exact: line is the author's text, so it rides either way.
+    said = _shots_of(run_node("A depot.\n\nAna waits.\nexact: the light stays low.",
+                              plan_only=True, character_memory=mem, verbatim=True))
+    check("an exact line still rides", "the light stays low." in said[0], said[0])
+
+
+def test_an_exact_line_is_yours_untouched():
+    """Everything else in a shot is either the author's text put through a reader or a
+    clause this file wrote, and on a short beat the node's own clauses were measured
+    at 70% of the shot against the beat's 8%. An `exact:` line is neither: it is
+    placed after the beat in the author's words and nothing reads, scopes, scrubs,
+    reorders or drops it."""
+    print("\n=== an exact: line reaches the model word for word ===")
+    mem = "Ana: she, 29, grey jacket.\nMara: she, 41, navy uniform."
+    P = ("A depot at night.\n\nMara walks Ana to the entrance.\n"
+         "exact: Ana's wrists stay behind her back the whole way.\n"
+         "exact: The light stays low\n\n"
+         "Ana stops at the door.")
+    out = run_node(P, plan_only=True, character_memory=mem)
+    shots = _shots_of(out)
+    check("the line is in the shot, word for word",
+          "Ana's wrists stay behind her back the whole way." in shots[0], shots[0][:220])
+    check("...a second one too, given the full stop it lacked",
+          "The light stays low." in shots[0], shots[0][:220])
+    check("...straight after the beat, ahead of the node's own clauses",
+          shots[0].index("wrists stay behind") < shots[0].index("There are two people"), "")
+    check("...and only in its own shot", "wrists stay behind" not in shots[1], shots[1][:120])
+    check("the directive line itself never reaches the model",
+          "exact:" not in shots[0].lower(), shots[0][:220])
+    check("the run says which shots carry one",
+          "shot(s) 1 carry an exact: line" in str(out[2]), "")
+    # Counted against the BEAT in the balance report, because it is the author's text.
+    def _share(info, what):
+        m = re.search(what + r" (?:is )?(\d+)%", str(info))
+        return int(m.group(1)) if m else -1
+    bare = run_node("A depot at night.\n\nMara walks Ana to the entrance.\n\nAna stops at the door.",
+                    plan_only=True, character_memory=mem)
+    check("...and it is counted as the author's words, not as a guard",
+          _share(out[2], "the beat") > _share(bare[2], "the beat")
+          and _share(out[2], "continuity clauses") < _share(bare[2], "continuity clauses"),
+          f"with {_share(out[2], 'the beat')}% vs without {_share(bare[2], 'the beat')}%")
+    # NOTHING READS IT. Otherwise "say this exactly" would quietly mean "stage this
+    # too", and the one instruction guaranteed to reach the model verbatim would be
+    # the one with the least predictable side effects.
+    read = run_node("A depot at night.\n\nAna waits.\n"
+                    "exact: Mara's van is parked behind her with its side door open.\n",
+                    plan_only=True, character_memory=mem)
+    solo = _shots_of(read)[0]
+    check("a name in it puts nobody in the shot",
+          "Mara: she, 41" not in solo and "one person in the shot" in solo, solo[:200])
+    check("...a door in it stages no change", "first frame and open by the last" not in solo, solo)
+    check("...and it is still in the text, whole",
+          "Mara's van is parked behind her with its side door open." in solo, solo[:200])
+    mood = run_node("A depot at night.\n\nAna waits.\nexact: Her hands are cuffed behind her back.\n\n"
+                    "Ana looks up.", plan_only=True, character_memory="Ana: she, 29, grey jacket.")
+    check("...and it does not set the mood of the film",
+          "mood is grim" not in mood[3], mood[3][-160:])
+    # IT HAS NO BUDGET TO LOSE. Squeeze the guard budget until clauses are dropped and
+    # the author's own line is still there.
+    floor, ratio = S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD
+    try:
+        S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = 6, 1
+        tight = run_node(P, plan_only=True, character_memory=mem)
+    finally:
+        S.GUARD_FLOOR_WORDS, S.GUARD_WORDS_PER_BEAT_WORD = floor, ratio
+    check("a squeezed budget drops guards", "guard clauses dropped for room" in str(tight[2]))
+    check("...and never the exact line",
+          "Ana's wrists stay behind her back the whole way." in _shots_of(tight)[0],
+          _shots_of(tight)[0][:200])
+    # The keywords, and the one that is NOT a keyword: a beat writes speech as
+    # `Mara says: "Wait here."` and a directive that swallows dialogue is worse than
+    # one word less convenient.
+    for word in ("exact", "exactly", "verbatim"):
+        check(f"{word}: is a directive", S.exact_lines(f"{word}: hold the frame") == ["hold the frame"])
+    check("say: is not", S.exact_lines('say: "wait here"') == [])
+    check("a sentence mid-beat is not a directive",
+          S.exact_lines("Mara says: \"Wait here.\"") == [])
+
+
 def test_a_walk_is_not_its_own_reverse():
     """REPORTED: somebody escorted from a vehicle to a doorway turned round, walked
     the other way, and then walked BACKWARDS to the doorway.
@@ -8052,6 +8162,8 @@ def main():
     test_a_cut_carries_the_people_across()
     test_a_thing_that_opens_itself_is_a_staged_change()
     test_a_walk_is_not_its_own_reverse()
+    test_an_exact_line_is_yours_untouched()
+    test_verbatim_sends_your_text_and_nothing_else()
     test_the_camera_is_held_where_nothing_places_it()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()

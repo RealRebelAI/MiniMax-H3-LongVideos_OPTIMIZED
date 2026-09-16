@@ -71,6 +71,32 @@ Mara steps out of the barn and asks him: "Is that the last one?"
 Dialogue goes in **double quotes**. Use the `anchor` widget if you want the framing
 carried separately — then every paragraph is a beat.
 
+### A line that must reach the model word for word
+
+Put it on its own line inside the beat:
+
+```
+Mara walks Ana to the entrance.
+exact: her wrists stay behind her back the whole way
+```
+
+It is placed straight after the beat, in your words, and nothing in the node reads,
+scopes, scrubs, reorders or drops it. That matters because the node's own continuity
+clauses compete for room: on a short beat they can be 70% of what the shot is told
+against the beat's 8%, and `info` reports that balance every run. An `exact:` line is
+not a guard and has no budget to lose.
+
+Nothing reads it either, on purpose: a name in it puts nobody in the shot, a garment in
+it removes nothing, and a door in it stages no change. Write what must be **said**, and
+let the beat stage what happens. `exactly:` and `verbatim:` do the same thing.
+
+To see your prompt entirely on its own, switch on the `verbatim` widget: a shot is then
+your scene, your beat and the sheet entries for the people it names, and nothing this
+node writes. Every failure the continuity clauses answer comes back with them —
+duplicate characters, invented speech, a drifting camera, a door that shuts itself, a
+walk played backwards — so it is most useful for proving whether a fault is the node's
+doing or the model's. `info` still lists what each clause would have said.
+
 ### The character sheet
 
 A paragraph of `Name: attributes` lines, or the `character_memory` widget. Each shot is

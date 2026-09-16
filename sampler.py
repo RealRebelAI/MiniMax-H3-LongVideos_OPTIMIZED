@@ -3670,6 +3670,35 @@ def strip_legacy_fields(text):
 
 _ADD_LINE = re.compile(r"^[ \t]*(?:add|wear|wearing)[ \t]*:[ \t]*(.+?)[ \t]*$", re.I | re.M)
 
+# YOUR SENTENCE, IN THIS SHOT, UNTOUCHED.
+#
+# Everything else in a shot is either the author's text put through a reader -- scoped
+# to this shot's people, scrubbed of what came off, reordered so the action leads --
+# or a clause this file wrote. Both are governed: on a short beat the node's own
+# continuity clauses were measured at 76% of a shot against the beat's 8%, and a
+# sentence competing with that cannot be relied on to survive intact.
+#
+# An `exact:` line is neither. It is placed straight after the beat, in the author's
+# words, and nothing here reads it, scopes it, scrubs it or drops it: it is not a
+# guard and has no budget to lose. Its cost is counted against the BEAT in the
+# balance report, because that is whose text it is.
+#
+# NOTHING READS IT, and that is the contract rather than an oversight. A name in an
+# exact line does not add that person to the shot, a garment in it removes nothing,
+# and a door in it stages no change -- otherwise "say this exactly" would quietly
+# mean "stage this too", and the one instruction guaranteed to reach the model
+# verbatim would be the one with the least predictable side effects.
+# NOT "say". A beat writes speech as `Mara says: "Wait here."` and a line could
+# plausibly open with it, and a directive that swallows dialogue is worse than one
+# word less convenient.
+_EXACT_LINE = re.compile(r"^[ \t]*(?:exact|exactly|verbatim)[ \t]*:[ \t]*(.+?)[ \t]*$",
+                         re.I | re.M)
+
+
+def exact_lines(beat):
+    """[the author's verbatim sentences] for this beat, in the order written."""
+    return [m.group(1).strip() for m in _EXACT_LINE.finditer(beat or "") if m.group(1).strip()]
+
 # Prose that reads as taking something off. NOT used to remove anything -- inferring
 # removals from prose is what made the old node unpredictable. It is used only to
 # notice that a beat looks like a removal while the scene still describes the
@@ -8028,7 +8057,10 @@ def extract_directives(beat):
             added.append(phrase)
         return ""
 
-    body = _ADD_LINE.sub(take_added, _REMOVE_LINE.sub(take_removed, beat or ""))
+    # `exact:` lines come OUT here and go back in downstream, untouched. Taking them
+    # out at the same point as the other directives is what keeps every reader in
+    # this file from seeing them -- see _EXACT_LINE.
+    body = _EXACT_LINE.sub("", _ADD_LINE.sub(take_added, _REMOVE_LINE.sub(take_removed, beat or "")))
     return re.sub(r"\n{2,}", "\n", body).strip(), removed, added
 
 
@@ -8664,7 +8696,19 @@ class H3LongVideos:
                                "Every paragraph after it is one beat = one shot.\n\n"
                                "Nothing is rewritten. What you type is what the shot is told, "
                                "plus the scene line. Put a quoted \"line of dialogue\" in a beat "
-                               "and that shot keeps its audio; beats without one are silenced."}),
+                               "and that shot keeps its audio; beats without one are silenced.\n\n"
+                               "A LINE THAT MUST REACH THE MODEL WORD FOR WORD goes on its own "
+                               "line in the beat:\n"
+                               "  exact: her wrists stay behind her back the whole way\n\n"
+                               "It is placed straight after the beat in your words, and nothing "
+                               "in this node reads, scopes, scrubs, reorders or drops it. On a "
+                               "short beat the node's own continuity clauses can be 70% of a "
+                               "shot and the beat 8%, and this is the one instruction that does "
+                               "not compete with them for room.\n\n"
+                               "Nothing reads it either, on purpose: a name in it puts nobody in "
+                               "the shot, a garment in it removes nothing, and a door in it "
+                               "stages no change. Write what must be SAID; let the beat stage "
+                               "what happens. `exactly:` and `verbatim:` do the same thing."}),
                 "resolution": (list(NATIVE_RES), {"default": "16:9",
                     "tooltip": "Aspect ratio. megapixels sets the size."}),
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.05,
@@ -9170,6 +9214,28 @@ class H3LongVideos:
                                "it down for that shot, and a journey between places keeps "
                                "its moving camera, because the node has already asked for "
                                "every step of it in frame."}),
+                # APPENDED. Saved workflows restore widget values by position.
+                "verbatim": ("BOOLEAN", {"default": False,
+                    "tooltip": "Send your text and NOTHING this node writes.\n\n"
+                               "On, a shot is your scene paragraph, your beat and the "
+                               "character sheet entries for the people it names -- and that "
+                               "is all. Every continuity clause goes: the body count, the "
+                               "mouth guard, the camera take, the two ends of a door or a "
+                               "walk, posture, gaze, bare regions, held states, sound "
+                               "direction.\n\n"
+                               "WHAT COMES BACK WITH THEM is every failure each one answers: "
+                               "duplicate characters, a face lip-syncing to invented speech, "
+                               "the camera drifting until the room is a different room, a "
+                               "door that opens and shuts itself, a walk played backwards, a "
+                               "garment that returns after it came off. Each was added for a "
+                               "reported failure, and info still lists what it would have "
+                               "said on every shot.\n\n"
+                               "The MECHANISMS stay: the keyframe chain, the reference "
+                               "claims, silence pinning, shot sizing, and the scoping that "
+                               "decides which of your own sentences a shot gets. This switch "
+                               "is about sentences the node WROTE.\n\n"
+                               "Use it to see your prompt on its own, or to prove whether a "
+                               "problem is the node's doing or the model's."}),
             },
         }
 
@@ -9197,7 +9263,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
-            hold_levels=0.8, hold_camera=True,
+            hold_levels=0.8, hold_camera=True, verbatim=False,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -9231,7 +9297,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=mouths_shut_when_no_line, hold_gaze=hold_gaze, ambient_audio=ambient_audio,
             ambient_level=ambient_level, foley_level=foley_level, speech_lead_seconds=speech_lead_seconds,
             speech_tail_seconds=speech_tail_seconds, beat_leads=beat_leads,
-            hold_levels=hold_levels, hold_camera=hold_camera,
+            hold_levels=hold_levels, hold_camera=hold_camera, verbatim=verbatim,
             **_removed)
         if isinstance(prepared, PreparedVideo):
             try:
@@ -9263,7 +9329,7 @@ class H3LongVideos:
             mouths_shut_when_no_line=True, hold_gaze=True,
             ambient_audio=None, ambient_level=0.25, foley_level=0.35,
             speech_lead_seconds=0.5, speech_tail_seconds=2.0, beat_leads=True,
-            hold_levels=0.8, hold_camera=True,
+            hold_levels=0.8, hold_camera=True, verbatim=False,
             **_removed):
         # **_removed: a workflow saved with the old `save_defaults` widget still sends
         # it. Swallowed rather than raising, so an existing workflow keeps loading.
@@ -9365,6 +9431,14 @@ class H3LongVideos:
         # the scene, so it is re-stamped into EVERY shot -- which is what makes a
         # removal stick and what stops a later shot describing no clothing at all.
         beats, sheet = pull_character_sheets(beats)
+        # THE EXACT LINES COME OUT HERE, ONCE, and go back in where the shot text is
+        # assembled. Taking them out at the source is what makes "nothing reads it"
+        # true of every reader rather than of the ones that were remembered: the film
+        # mood, the shot sizing and the multi-line check all take the beats as they
+        # are, and a first version that stripped them further downstream had an exact:
+        # line about cuffs setting the mood of the whole film. See _EXACT_LINE.
+        _exact_all = [exact_lines(b) for b in beats]
+        beats = [_EXACT_LINE.sub("", b).strip() for b in beats]
         # The sheet is kept APART from the rest of the scene: it is the part that
         # varies per shot, because only the people a beat involves should be
         # described in it. Everything else is stamped on every shot unchanged.
@@ -9641,6 +9715,7 @@ class H3LongVideos:
         _undescribed = []           # rooms the film enters that the prompt never describes
         open_moves = []             # (shot, where) moves to a place the list cannot name
         frame_shots = []            # shots told what the frame holds
+        exact_shots = []            # shots carrying an exact: line of the author's
         camera_shots = []           # shots told the camera holds still
         contact_shots = []          # shots told which body is with which
         led_shots = []              # shots whose beat was put ahead of the sheet
@@ -9760,6 +9835,12 @@ class H3LongVideos:
         _sheet_hw = {c for c, _p, _w, _a in engine.hardware_spans(sheet or "")}
         for b in beats:
             body, toks, adds = extract_directives(b)
+            # The author's own sentences for this shot, held aside until the text is
+            # assembled. See _EXACT_LINE.
+            _said = _exact_all[len(plan)] if len(plan) < len(_exact_all) else []
+            _exact = (" " + " ".join(terminate_lines(x) for x in _said)) if _said else ""
+            if _said:
+                exact_shots.append(len(plan) + 1)
             # Quoted speech becomes H3'S OWN dialogue marker before anything else
             # reads it. <d> and </d> are special tokens the model was trained with,
             # and they say "this is spoken" where quotation marks say nothing at
@@ -11645,15 +11726,23 @@ class H3LongVideos:
             # Body count is a composition invariant, not a continuity detail. It
             # must not evict speaker, gaze, or ownership clauses from the bounded
             # guard budget; doing so fixed the extra body by breaking who spoke.
-            shot_text = (line + _cast_hold + _kept).strip()
+            # The exact lines ride between the beat and the node's own clauses: after
+            # the action they belong to, ahead of everything this file decided.
+            #
+            # ...and under `verbatim` there is nothing after them. The clauses are still
+            # WORKED OUT -- info reports what each shot would have been told, which is
+            # what makes this switch worth having as a diagnostic -- they are simply not
+            # sent. See the widget's tooltip for what comes back with them.
+            shot_text = ((line + _exact).strip() if verbatim
+                         else (line + _exact + _cast_hold + _kept).strip())
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
             _sound_kept = "" if "sound" in _dropped else _sound
             sound_words += len(_sound_kept.split())
             guard_words += (len(shot_text.split()) - len(_sound_kept.split())
-                            - len(f"{_scene_sent} {body}".split()))
-            beat_words += len(body.split())
+                            - len(f"{_scene_sent} {body}".split()) - len(_exact.split()))
+            beat_words += len(body.split()) + len(_exact.split())
             total_words += len(shot_text.split())
             # The event sounds this beat implies, kept per shot so they can be
             # BUILT and mixed into that shot's span later. `heard` is not it:
@@ -11701,6 +11790,21 @@ class H3LongVideos:
                      "they are named in, this one included"
                    if _bare else
                    ". All of them carry a reference tag, which is what pins them here"))
+        if verbatim:
+            # FIRST in the list, because every note after it describes a clause this run
+            # did not send. They are kept rather than suppressed: what the node WOULD
+            # have said, shot by shot, is the whole diagnostic value of this switch.
+            notes.insert(0,
+                "VERBATIM is on: each shot was sent your scene, your beat and the sheet "
+                "entries for the people it names, and nothing this node writes -- no body "
+                "count, no mouth guard, no camera take, no two-ended anchor for a door or "
+                "a walk, no posture, gaze, bare region, held state or sound direction. "
+                "Every note below still reports what a clause WOULD have said, which is "
+                "what makes this worth running: it tells you whether something you are "
+                "looking at is the node's doing or the model's. The mechanisms are "
+                "untouched -- the keyframe chain, the reference claims, silence pinning, "
+                "shot sizing, and the scoping that decides which of your own sentences a "
+                "shot gets")
         if total_words:
             notes.append(
                 f"prompt balance: the beat is {100 * beat_words / total_words:.0f}% of "
@@ -11907,6 +12011,17 @@ class H3LongVideos:
                 f"that prior is movement. Your words always win: any camera note in the "
                 f"beat or the anchor stands it down there, and a journey between places "
                 f"keeps its moving camera. Off with hold_camera")
+        if exact_shots:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in exact_shots)} carry an exact: line. "
+                f"It is placed straight after the beat in your words, and nothing in this "
+                f"node reads, scopes, scrubs, reorders or drops it -- it is not a guard "
+                f"and has no budget to lose, which is what makes it the one instruction "
+                f"that reaches the model exactly as written. Nothing reads it either: a "
+                f"name in it puts nobody in the shot, a garment in it removes nothing and "
+                f"a door in it stages no change, so write what must be SAID there and let "
+                f"the beat stage what happens. Counted against the beat in the balance "
+                f"below, because it is your text")
         if frame_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in frame_shots)} stage something a "
