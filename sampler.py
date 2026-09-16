@@ -6503,16 +6503,51 @@ _SHUTS = re.compile(r"(?:closes?|closed|closing|shuts?|shutting|slams?|slammed|"
                     r"slamming|locks?|locked|locking|lowers?|lowered)\Z", re.I)
 
 
+# A DIRECTION THE VERB DOES NOT CARRY, SAID BESIDE IT. "slides", "swings" and
+# "pulls" go either way and get no anchor from the verb alone -- but "slides OPEN"
+# is not ambiguous, and neither is "swings shut". Reported: a van whose side door
+# slides open and is closed again halfway through the shot, which is the reversal
+# the anchor exists to settle; the beat said which way and nothing read it.
+#
+# "back" is here because that is how a sliding door and a curtain open -- "slides
+# back", "draws back". Nothing in this list means shut by accident: the shut words
+# are the two that only ever mean shut.
+_WAY_WORD = re.compile(r"\A(?:(open|wide|back|apart|aside)|(shut|closed))\b", re.I)
+# ...and THE THING BEFORE THE VERB, which is the ordinary way to write it. Every
+# reader here expected "opens the door" and the beat said "the door slides open", so
+# a door that opens on its own -- which is what a van's side door does in a script --
+# was not a staged change at all: no anchor, and no clearing of a held state saying
+# it was shut. A determiner in front is required for the same reason the forward
+# reader demands one: "the closed door" is an adjective, "the door closed" is not.
+_STATE_ACT_REV = re.compile(
+    r"\b(?:the|a|an|its|his|her|their|our|my|your|this|that|these|those|both|all|"
+    r"each|every|another|one|two|three|\w+'s)\s+((?:[\w']+\s+){0,2}?)(" + _STATE_THING
+    + r")\s+((?:[\w']+\s+){0,1}?)(" + _STATE_ACTS + r")\b", re.I)
+
+
 def state_changes(text):
     """[(thing, 'open'|'shut'|None)] for the scenery this text actually works.
 
     A state word sitting straight in front of its noun is an adjective describing
     the thing, not a verb acting on it: "the closed doors" says nothing happens.
-    The direction is None where the verb does not carry one."""
+    The direction is None where neither the verb nor a word beside it carries one."""
     out, seen = [], set()
-    for m in _STATE_ACT.finditer(text or ""):
-        verb, gap, thing = m.group(1), m.group(2), m.group(3)
-        if _adjectival(verb, gap):
+    found = [(m.group(1), m.group(2), m.group(3), m.end(), False)
+             for m in _STATE_ACT.finditer(text or "")]
+    found += [(m.group(4), m.group(3), m.group(2), m.end(), True)
+              for m in _STATE_ACT_REV.finditer(text or "")]
+    for verb, gap, thing, end, reverse in sorted(found, key=lambda f: f[3]):
+        # A STATE, NOT AN ACT. Read forwards that is the missing determiner ("closed
+        # rear doors"). Read backwards the word order cannot settle it -- "a van with
+        # its doors closed" and "the door closed" put the same two words in the same
+        # order -- so the backwards reader takes only words that are verbs and nothing
+        # else: "slides", "swings", "opens". A bare state word after its noun is left
+        # to stated_states, which puts it at the first frame. Anchoring it instead
+        # would ask for the change it says has already happened.
+        if reverse:
+            if re.fullmatch(_STATE_WORD, verb, re.I):
+                continue
+        elif _adjectival(verb, gap):
             continue
         key = _state_key(thing)
         if key in seen:
@@ -6520,6 +6555,11 @@ def state_changes(text):
         seen.add(key)
         way = ("open" if _OPENS.match(verb) else
                "shut" if _SHUTS.match(verb) else None)
+        if way is None:
+            # The beat named the end even though the verb does not.
+            said = _WAY_WORD.match((text or "")[end:].lstrip())
+            if said:
+                way = "open" if said.group(1) else "shut"
         out.append((thing.lower(), way))
     return out
 
@@ -6953,6 +6993,16 @@ def split_sheet(scene, names=()):
     return " ".join(rest), " ".join(sheet)
 
 
+# WHERE ONE CLAUSE ENDS. Full stops and semicolons both, because a scene paragraph
+# describes a flat one room per clause and the clauses are as often joined as
+# separated: "The living room has a red sofa; the kitchen has white tiles." Split on
+# sentences alone that is ONE unit naming two rooms, which scene_for_here keeps --
+# correctly, by its own rule that a sentence naming both stays -- so every shot in
+# the flat carried both rooms and the model was free to render either, or to change
+# its mind halfway through the shot and render the other.
+_CLAUSE_END = r"(?<=[.!?;])\s+"
+
+
 def scene_for_here(scene, here, always="", names=(), beat=""):
     """(text to send, rooms held back, True if it declined to hold anything).
 
@@ -7030,20 +7080,20 @@ def scene_for_here(scene, here, always="", names=(), beat=""):
     beat_rooms = set(rooms_named(
         _DIALOGUE_TAG.sub(" ", _QUOTED.sub(" ", str(beat or "")))))
     spared = set()
-    for unit in re.split(r"(?<=[.!?])\s+", str(always or "")):
-        u = unit.strip().rstrip(".!? ").lower()
+    for unit in re.split(_CLAUSE_END, str(always or "")):
+        u = unit.strip().rstrip(".!?; ").lower()
         if u:
             spared.add(u)
     lines, held, held_text, survived = [], [], [], False
     for raw in text.split("\n"):
-        kept = []
-        for unit in re.split(r"(?<=[.!?])\s+", raw):
+        kept, cut_here = [], False
+        for unit in re.split(_CLAUSE_END, raw):
             # A sheet entry. Never touched.
             if _is_sheet_entry(unit):
                 kept.append(unit)
                 continue
             # ...nor anything the anchor said. It frames the whole film.
-            if unit.strip().rstrip(".!? ").lower() in spared:
+            if unit.strip().rstrip(".!?; ").lower() in spared:
                 kept.append(unit)
                 survived = True
                 continue
@@ -7057,9 +7107,22 @@ def scene_for_here(scene, here, always="", names=(), beat=""):
                         held.append(r)
                 if unit.strip() not in held_text:
                     held_text.append(unit.strip())
+                cut_here = True
                 continue
             kept.append(unit)
             survived = True
+        # Punctuation is repaired only on a line something was held BACK from. A
+        # clause that ended in a semicolon has lost what followed it, and one
+        # promoted out of a semicolon now opens a sentence. A line this held nothing
+        # from is the author's, spacing and semicolons included.
+        if cut_here:
+            mended = []
+            for unit in (k for k in kept if k.strip()):
+                unit = re.sub(r";$", ".", unit.strip())
+                if mended and mended[-1].endswith(".") and unit[:1].islower():
+                    unit = unit[0].upper() + unit[1:]
+                mended.append(unit)
+            kept = mended
         lines.append(" ".join(k for k in kept if k.strip()))
     if not held:
         return text, [], False, []

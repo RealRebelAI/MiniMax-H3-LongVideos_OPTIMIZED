@@ -2024,6 +2024,41 @@ def test_the_camera_is_held_where_nothing_places_it():
           and "told it HOLDS" not in str(off[2]))
 
 
+def test_a_thing_that_opens_itself_is_a_staged_change():
+    """REPORTED: a van pulls up, its side door slides open, somebody gets out -- and
+    halfway through the shot the door is closed again.
+
+    That reversal is what the two-ended anchor settles, and it never ran. The reader
+    wanted the verb in FRONT of its noun ("opens the door"), while a door that opens
+    on its own is written the other way round; and "slides" is in the list of verbs
+    that go either way and earn no anchor on their own. The beat said which way in
+    the word right after the verb, and nothing read it."""
+    print("\n=== a door that opens itself is a change with two ends ===")
+    for text, want in (("A van pulls up and the side door slides open.", [("door", "open")]),
+                       ("The side door slides shut.", [("door", "shut")]),
+                       ("The gate swings shut behind her.", [("gate", "shut")]),
+                       ("The curtains draw back.", [("curtains", "open")]),
+                       ("The door is opening.", [("door", "open")]),
+                       ("Ana pulls the door open.", [("door", "open")])):
+        check(f"{text[:38]!r}", S.state_changes(text) == want, str(S.state_changes(text)))
+    # A STATE IS STILL A STATE. The same two words in the same order say both things
+    # -- "the door closed" works it, "a van with its doors closed" describes it -- so
+    # the backwards reader takes only words that are verbs and nothing else, and
+    # leaves a bare state word to stated_states and the first frame.
+    for text in ("The window is open.", "Mara and Dom stand behind a van with its doors closed.",
+                 "The curtains are still drawn.", "They stand by the closed doors of the van."):
+        check(f"still a state: {text[:34]!r}", S.state_changes(text) == []
+              and bool(S.stated_states(text)), str(S.state_changes(text)))
+    # END TO END: the shot gets both ends of the change.
+    shots = _shots_of(run_node(
+        "A loading yard at dawn.\n\nA van pulls up and the side door slides open; Ana jumps out."
+        "\n\nAna walks to the shutter.", plan_only=True, character_memory="Ana: she, 29, grey jacket."))
+    check("the shot is told which end is which",
+          "The door is shut at the first frame and open by the last." in shots[0], shots[0][-200:])
+    check("...and the shot after it is not told the old state",
+          "door is shut" not in shots[1], shots[1][-160:])
+
+
 def test_a_cut_carries_the_people_across():
     """REPORTED: shots cutting to a new scene, breaking character continuity.
 
@@ -2973,6 +3008,37 @@ def test_a_rooms_description_waits_outside_that_room():
                      plan_only=True, character_memory=mem)[2]
     check("a script that never leaves one room reports nothing",
           "WAITS OUTSIDE" not in info1, "")
+
+    # TWO ROOMS IN ONE SENTENCE, joined by a semicolon -- which is how a scene
+    # paragraph describes a flat. Split on full stops alone that is one unit naming
+    # both rooms, and the rule that a sentence naming BOTH stays then kept the whole
+    # flat in every shot: the model may render either room, or change its mind
+    # halfway through the shot and render the other. Reported as the scene shifting
+    # into a different form of itself mid-shot.
+    FLAT = "A small apartment. The living room has a red sofa; the kitchen has white tiles."
+    lounge = S.scene_for_here(FLAT, "living room", "", ["Maya"], "")
+    kitchen = S.scene_for_here(FLAT, "kitchen", "", ["Maya"], "")
+    check("the living-room shot keeps the sofa and not the tiles",
+          "red sofa" in lounge[0] and "white tiles" not in lounge[0], lounge[0])
+    check("...and says which room waited", lounge[1] == ["kitchen"], str(lounge[1]))
+    check("the kitchen shot keeps the tiles and not the sofa",
+          "white tiles" in kitchen[0] and "red sofa" not in kitchen[0], kitchen[0])
+    check("the film's own framing survives both", all(
+        "A small apartment." in sent for sent in (lounge[0], kitchen[0])), "")
+    check("...and a clause promoted out of a semicolon opens its sentence",
+          "The kitchen has white tiles." in kitchen[0], kitchen[0])
+    # A line nothing was held from is the author's, punctuation included.
+    plain = S.scene_for_here("A cabin. Snow outside; a fire burning.", "kitchen", "", ["Maya"], "")
+    check("a line that held nothing keeps its semicolons",
+          plain[0] == "A cabin. Snow outside; a fire burning.", plain[0])
+    # End to end: neither shot carries the other room.
+    shots = _shots_of(run_node(
+        FLAT + "\n\nMaya reads on the red sofa in the living room.\n\n"
+        "Maya fills the kettle in the kitchen.", plan_only=True,
+        character_memory="Maya: she, 30, green sweater."))
+    check("no shot carries the room it is not in",
+          "white tiles" not in shots[0] and "red sofa" not in shots[1],
+          " | ".join(s[:80] for s in shots))
 
 
 def test_a_covered_object_does_not_send_its_picture():
@@ -7944,6 +8010,7 @@ def main():
     test_dan_is_not_instantiated_twice()
     test_somebody_still_in_the_frame_is_not_back()
     test_a_cut_carries_the_people_across()
+    test_a_thing_that_opens_itself_is_a_staged_change()
     test_the_camera_is_held_where_nothing_places_it()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
