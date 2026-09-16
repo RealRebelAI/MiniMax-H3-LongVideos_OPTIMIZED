@@ -6657,6 +6657,16 @@ _TRAVEL_VERB = re.compile(
     # omission from the other end.
     r"leave|leaves|left|leaving|enter|enters|entered|entering|"
     r"cross|crosses|crossed|crossing|exit|exits|exited|exiting|"
+    # TAKING SOMEBODY SOMEWHERE is a journey too, and these are the words a script
+    # uses for it. Reported: somebody escorted from a vehicle to a doorway got no
+    # travel clause at all -- "escorts" was in no list -- so the one shot that had to
+    # perform a walk was told nothing about performing it, and what it did instead
+    # was turn round and walk backwards. Safe to be generous: every reader here needs
+    # a DESTINATION as well as the verb, so "brings a cup" moves nobody.
+    r"escort|escorts|escorted|escorting|usher|ushers|ushered|ushering|"
+    r"march|marches|marched|marching|guide|guides|guided|guiding|"
+    r"bring|brings|brought|bringing|drag|drags|dragged|dragging|"
+    r"haul|hauls|hauled|hauling|"
     r"return|returns|returned|returning)\b", re.I)
 
 
@@ -6817,15 +6827,40 @@ def moved_to(beat, people=()):
     return ""
 
 
-def move_clause(dest):
+# A WALK THE MODEL CAN PLAY BACKWARDS. Reported: somebody escorted from a vehicle to
+# a doorway turned round, walked the other way, and then walked BACKWARDS to the
+# doorway. That is the same reversal the door anchor exists to settle -- time-flip
+# augmentation teaches a model that a clip and its reverse are the same clip -- and
+# the travel clause could not settle it, because everything it said is as true of the
+# reversed walk as of the real one: a walk between two places, every step in frame,
+# played out on screen. It named the two ends in SPACE and left the direction open.
+#
+# Two facts close it, and both are positive: which way the bodies face, and that the
+# destination gets NEARER. A reversed render contradicts each of them.
+#
+# Not on a beat that walks backwards on purpose. The author's words win, as they do
+# against every other inference here.
+_GOES_BACKWARD = re.compile(
+    r"\b(?:backwards?|in\s+reverse|backs?\s+(?:away|out|up|off)|backing\s+(?:away|out|up)|"
+    r"retreats?|retreating|reverses?|reversing)\b", re.I)
+
+
+def facing_phrase(beat=""):
+    """"each body facing the way it goes", unless the beat walks backwards."""
+    return "" if _GOES_BACKWARD.search(str(beat or "")) else " each body facing the way it goes"
+
+
+def move_clause(dest, beat=""):
     """Perform an arrival the place list cannot name. "" when there is nowhere."""
     if not dest:
         return ""
+    facing = facing_phrase(beat)
     return (f" The shot travels to the {dest} on screen, the whole move played out "
-            f"from its first step to its last.")
+            f"from its first step to its last,{facing + ' and' if facing else ''} the "
+            f"{dest} nearer at the last frame than at the first.")
 
 
-def travel_anchor(frm, via, to, here=""):
+def travel_anchor(frm, via, to, here="", beat=""):
     """Say where the shot starts, what it passes, and where it ends. "" if nowhere.
 
     `here` is the room an earlier beat established, used when the beat names no
@@ -6846,7 +6881,9 @@ def travel_anchor(frm, via, to, here=""):
     # Reported twice as an instant cut across a house, once after the destination
     # reader was fixed and the clause was demonstrably in the prompt. Say what the
     # shot DOES: the walk happens, on screen, in frame, the whole way.
-    walk = "the walk between them played out on screen, every step in frame."
+    facing = facing_phrase(beat)
+    walk = ("the walk between them played out on screen, every step in frame"
+            + (f",{facing}." if facing else "."))
     if via:
         return (f" The shot opens in the {start}, carries along the {via}, and "
                 f"arrives in the {to}, {walk}") if start else (
@@ -6862,7 +6899,8 @@ def travel_anchor(frm, via, to, here=""):
     # the room.
     if not start:
         return (f" The shot enters the {to} on screen: the way in first, then the "
-                f"{to} itself, the arrival played out and every step in frame.")
+                f"{to} itself, the arrival played out, every step in frame"
+                + (f",{facing}." if facing else "."))
     return f" The shot opens in the {start} and arrives in the {to}, {walk}"
 
 
@@ -10668,7 +10706,7 @@ class H3LongVideos:
             # while sized as if it went nowhere is how a three-room walk ended up in a
             # three-second shot. See travel_legs and travel_spaces.
             _frm, _via, _to = travel_legs(body)
-            _travel = travel_anchor(_frm, _via, _to, here)
+            _travel = travel_anchor(_frm, _via, _to, here, body)
             if _travel:
                 travel_shots.append(len(plan) + 1)
             else:
@@ -10676,7 +10714,7 @@ class H3LongVideos:
                 # anyway: a move nobody is told to make is a move the model cuts to.
                 # See moved_to -- this establishes no room state at all.
                 _open_to = moved_to(body, active)
-                _travel = move_clause(_open_to)
+                _travel = move_clause(_open_to, body)
                 if _travel:
                     open_moves.append((len(plan) + 1, _open_to))
             # The room the next beat starts from: where this one ended, or where it

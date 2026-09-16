@@ -2024,6 +2024,46 @@ def test_the_camera_is_held_where_nothing_places_it():
           and "told it HOLDS" not in str(off[2]))
 
 
+def test_a_walk_is_not_its_own_reverse():
+    """REPORTED: somebody escorted from a vehicle to a doorway turned round, walked
+    the other way, and then walked BACKWARDS to the doorway.
+
+    The same reversal the door anchor settles -- time-flip augmentation teaches a
+    model that a clip and its reverse are the same clip -- and the travel clause
+    could not settle it: everything it said was as true of the reversed walk as of
+    the real one. It named the two ends in SPACE and left the direction open."""
+    print("\n=== a walk says which way it goes ===")
+    mem = "Ana: she, 29, grey jacket.\nMara: she, 41, navy uniform."
+    said = S.move_clause("office door", "Mara walks Ana to the office door.")
+    check("a move to an unlisted place says which way the bodies face",
+          "each body facing the way it goes" in said, said)
+    check("...and that the destination gets nearer",
+          "office door nearer at the last frame than at the first" in said, said)
+    between = S.travel_anchor("garage", "", "hallway", "", "Mara walks Ana to the hallway.")
+    check("a walk between two rooms says it too",
+          "each body facing the way it goes" in between, between)
+    arriving = S.travel_anchor("", "", "hallway", "", "Ana walks into the hallway.")
+    check("...and so does an arrival with no origin",
+          "each body facing the way it goes" in arriving, arriving)
+    # A BEAT THAT WALKS BACKWARDS ON PURPOSE keeps its own direction, like every
+    # other inference here that the author's own words stand down.
+    for beat in ("Ana backs away to the office door.", "Ana walks backwards to the door.",
+                 "Ana retreats to the office door."):
+        check(f"the author's direction wins: {beat[:30]!r}",
+              "facing the way it goes" not in S.move_clause("office door", beat), beat)
+    # TAKING SOMEBODY SOMEWHERE is a journey. "escorts" was in no verb list, so the
+    # one shot that had to perform a walk was told nothing about performing it.
+    for beat, want in (("Mara escorts Ana to the entrance.", True),
+                       ("Mara ushers Ana to the gate.", True),
+                       ("Mara marches Ana to the depot entrance.", True),
+                       ("Mara brings Ana a cup of tea.", False),
+                       ("Mara hands Ana the keys.", False)):
+        shot = _shots_of(run_node("A depot at night.\n\n" + beat, plan_only=True,
+                                  character_memory=mem))[0]
+        check(f"travel clause={want}: {beat[:34]!r}",
+              ("The shot travels to" in shot) == want, shot[-140:])
+
+
 def test_a_thing_that_opens_itself_is_a_staged_change():
     """REPORTED: a van pulls up, its side door slides open, somebody gets out -- and
     halfway through the shot the door is closed again.
@@ -8011,6 +8051,7 @@ def main():
     test_somebody_still_in_the_frame_is_not_back()
     test_a_cut_carries_the_people_across()
     test_a_thing_that_opens_itself_is_a_staged_change()
+    test_a_walk_is_not_its_own_reverse()
     test_the_camera_is_held_where_nothing_places_it()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()
