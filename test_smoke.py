@@ -2024,6 +2024,199 @@ def test_the_camera_is_held_where_nothing_places_it():
           and "told it HOLDS" not in str(off[2]))
 
 
+class FakePatcher:
+    """A ModelPatcher's LoRA bookkeeping, and nothing else.
+
+    ComfyUI keeps `patches` as weight name -> [(strength, delta, strength_model,
+    offset, function)], one entry per LoRA that touched that weight, and the last
+    LoRA's safetensors metadata under the "lora_metadata" attachment."""
+
+    def __init__(self, keys=4, strength=0.8, stacked=1, name="crystal_v3"):
+        self.patches = {f"w{i}": [(strength, object(), 1.0, None, None)] * stacked
+                        for i in range(keys)}
+        self.patches_uuid = "original"
+        self.attachments = {"lora_metadata": {"ss_output_name": name}} if name else {}
+
+    def clone(self):
+        twin = FakePatcher.__new__(FakePatcher)
+        twin.patches = {k: list(v) for k, v in self.patches.items()}
+        twin.patches_uuid = self.patches_uuid
+        twin.attachments = dict(self.attachments)
+        return twin
+
+
+class LoraCLIP(FakeCLIP):
+    def __init__(self, patcher=None):
+        super().__init__()
+        self.patcher = patcher if patcher is not None else FakePatcher()
+
+    def clone(self):
+        twin = LoraCLIP(self.patcher.clone())
+        twin.seen = self.seen
+        return twin
+
+
+def test_one_photographed_face_and_two_people():
+    """REPORTED: duplicates that happen when a picture was NOT used for a character.
+
+    A shot carrying a reference for one person and describing another who has none is
+    one photographed face and two people to draw. A reference is the strongest
+    identity signal in a prompt -- far stronger than "35, dark hair" -- so the one
+    that exists gets used for both bodies and the second character arrives as a copy
+    of the first. This file's own note on it said the node could not stop it, because
+    no sentence outranks a photo. There is no sentence, but there is a picture: a
+    frame from a shot that held the other person ALONE, in the clothes they are
+    wearing now, which is the same frame a returning face is recovered from."""
+    print("\n=== one photographed face and two people to draw ===")
+    mem = "Dan: <Picture 1>, he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
+    P = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
+         "Dan and Crystal talk.\n\nDan laughs.")
+    rows = _encoded_refs(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))
+    counts = [n for _p, n in rows]
+    tags = [re.findall(r"<Picture (\d+)>", p) for p, _n in rows]
+    check("the mixed shot carries a picture for each of them", counts[2] == 2, str(counts))
+    check("...each claimed on its own sheet entry",
+          "Dan: <Picture 1>," in rows[2][0] and "Crystal: <Picture 2>," in rows[2][0],
+          rows[2][0][:200])
+    check("...numbered 1..n with nothing unclaimed",
+          sorted(int(x) for x in tags[2]) == [1, 2], str(tags[2]))
+    info = str(run_node(P, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
+    check("the run says whose face it sent and where it came from",
+          "shot 3 gave Crystal a face of their own, from shot 2" in info, info[-200:])
+    check("...and that tagging her does the same from the first shot",
+          "does the same thing from the first shot" in info)
+
+    # NOT WHEN THERE IS NOTHING CLEAN TO SEND. She is never alone, so no frame of her
+    # exists that does not also carry him -- and a frame with two people in it is the
+    # duplicate, not the cure.
+    never = ("A kitchen.\n\nDan and Crystal talk.\n\nDan pours coffee.\n\nCrystal laughs.")
+    quiet = str(run_node(never, character_memory=mem, ref_image_1=torch.rand(1, H, W, 3))[2])
+    check("nothing is sent when no solo frame of her exists",
+          "face of their own" not in quiet)
+    check("...and the state is still reported as the hazard it is",
+          "no <Picture N> of their own" in quiet, quiet[-200:])
+
+    # NOT A FRAME FROM BEFORE SHE CHANGED. A picture is a picture of the clothes in
+    # it, and a reference puts them back on -- the same rule the recovered face keeps.
+    changed = ("A kitchen.\n\nDan pours coffee.\n\nCrystal reads at the table alone.\n\n"
+               "Crystal takes off her jacket.\nremove: jacket\n\nDan and Crystal talk.")
+    stale = str(run_node(changed, character_memory=mem + ", a denim jacket",
+                         ref_image_1=torch.rand(1, H, W, 3))[2])
+    check("a frame from before she changed clothes is not sent",
+          "face of their own" not in stale, stale[-200:])
+
+    # NOT WHEN BOTH ARE TAGGED: neither is short of a picture.
+    both = "Dan: <Picture 1>, he, 35, black t-shirt.\nCrystal: <Picture 2>, she, 35, white t-shirt."
+    two = str(run_node(P, character_memory=both, ref_image_1=torch.rand(1, H, W, 3),
+                       ref_image_2=torch.rand(1, H, W, 3))[2])
+    check("two tagged people need no evening up", "face of their own" not in two)
+
+
+def test_an_untagged_reference_is_claimed_or_held():
+    """REPORTED: character duplicates that survive every guard here, on a setup where
+    dropping a LoRA's strength to 0.5 changed nothing.
+
+    A reference image connected with no <Picture N> tag rode EVERY shot with nothing
+    in the text naming it -- this file's oldest rule broken in its commonest setup,
+    because connecting a face to ref_image_1 without writing a tag is how most people
+    wire one up. A picture the text names is that subject; one it never mentions is
+    another subject standing beside them, and no wording here can argue with a second
+    person that arrives as a picture."""
+    print("\n=== an untagged reference is claimed, or it is not sent ===")
+    img = lambda: torch.rand(1, H, W, 3)
+    mem = "Dan: he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
+    P = "A kitchen.\n\nDan and Crystal sit at the table.\n\nCrystal laughs.\n\nDan pours coffee."
+
+    rows = _encoded_refs(P, character_memory=mem, ref_image_1=img())
+    counts = [n for _p, n in rows]
+    tags = [sorted({int(x) for x in re.findall(r"<Picture (\d+)>", p)}) for p, _n in rows]
+    check("the two-person shot is sent no reference at all", counts[0] == 0, str(counts))
+    check("...and the solo shots get it, claimed on the person they describe",
+          counts[1:] == [1, 1] and tags[1] == [1] and tags[2] == [1], f"{counts} {tags}")
+    check("...on that person's own sheet entry", "Dan: <Picture 1>," in rows[2][0], rows[2][0][:160])
+    info = str(run_node(P, character_memory=mem, ref_image_1=img())[2])
+    check("the run says which shots claimed it", "claimed on the one person they describe" in info)
+    check("...and which were sent none", "were sent NO reference" in info)
+    check("...and what to do instead", "Tag the pictures" in info)
+
+    # Two pictures and one person is still a guess about which picture is whom.
+    two = [n for _p, n in _encoded_refs(P, character_memory=mem, ref_image_1=img(), ref_image_2=img())]
+    check("two untagged pictures are never placed", two == [0, 0, 0], str(two))
+
+    # NOBODY TO DUPLICATE. A shot with no person described cannot grow a second
+    # character, so a look or location reference rides as it always did.
+    plate = [n for _p, n in _encoded_refs("A kitchen with white tiles.\n\nThe kettle boils.\n\n"
+                                          "Steam rises from the spout.", ref_image_1=img())]
+    check("a script with nobody in it keeps its reference", plate == [1, 1], str(plate))
+
+    # A TAGGED reference is unchanged: it rides the shots that name its subject.
+    tagged = _encoded_refs(P, character_memory="Dan: <Picture 1>, he, 35, black t-shirt.\n"
+                                               "Crystal: she, 35, white t-shirt.",
+                           ref_image_1=img())
+    check("tagging it puts it back on every shot that names him, and only those",
+          [n for _p, n in tagged] == [1, 0, 1], str([n for _p, n in tagged]))
+
+
+def test_a_shared_pose_names_nobody():
+    """Every clause that owns a fact pays a naming to say whose it is, and this file's
+    own rule is that naming somebody twice in one shot draws a second copy. One pose
+    shared by everybody needs no names at all."""
+    print("\n=== a pose everybody shares is said once, impersonally ===")
+    check("two people, one pose", S.posture_hold({"Dan": "sitting", "Crystal": "sitting"},
+                                                 ["Dan", "Crystal"]) == " Both are sitting.")
+    check("three of them", S.posture_hold({"Dan": "sitting", "Crystal": "sitting", "Mara": "sitting"},
+                                          ["Dan", "Crystal", "Mara"]) == " Everyone in the shot is sitting.")
+    check("poses that differ still name their owners",
+          S.posture_hold({"Dan": "sitting", "Crystal": "kneeling"}, ["Dan", "Crystal"])
+          == " Dan is sitting; Crystal is kneeling.")
+    check("somebody described with no pose held keeps the naming",
+          S.posture_hold({"Dan": "sitting"}, ["Dan", "Crystal"]) == " Dan is sitting.")
+    check("standing is still never held", S.posture_hold({"Dan": "standing", "Crystal": "standing"},
+                                                         ["Dan", "Crystal"]) == "")
+    mem = "Dan: he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
+    shots = _shots_of(run_node("A kitchen.\n\nDan and Crystal sit at the table.\n\n"
+                               "Dan and Crystal laugh together.", character_memory=mem, plan_only=True))
+    check("the shot after they sit says it without names",
+          "Both are sitting." in shots[1] and "Dan is sitting" not in shots[1], shots[1][-200:])
+    # ...and the count of namings is reported, with how much of it is this node's.
+    info = str(run_node("A kitchen.\n\nDan and Crystal sit at the table.\n\n"
+                        "Crystal laughs and touches Dan's arm.\n\nCrystal looks at Dan.",
+                        character_memory=mem, plan_only=True)[2])
+    check("a person named three times in a shot is reported",
+          "named more than twice in one shot" in info and "from this node" in info, info[:120])
+
+
+def test_a_lora_is_reported():
+    """A LoRA is the one input to a shot this node neither writes nor can read out of
+    the text, and it was invisible here: two runs whose prompts are identical render
+    differently and nothing else said why. Reporting it is all this does -- a lever
+    that scaled it down was tried and taken out again, because dropping a strength to
+    0.5 did not stop the duplicates it was built for."""
+    print("\n=== what LoRA is attached is reported ===")
+    patcher = FakePatcher(keys=6, strength=0.9, stacked=2)
+    check("the stack, the weights and the strengths are read off the patcher",
+          S.lora_facts(patcher) == (2, 6, [0.9]), str(S.lora_facts(patcher)))
+    check("...nothing claimed for a model carrying none", S.lora_facts(object()) == (0, 0, []))
+    check("the last one's name comes out of its metadata",
+          S.lora_name_of(patcher) == "crystal_v3", S.lora_name_of(patcher))
+    check("...and nothing is invented without metadata",
+          S.lora_name_of(FakePatcher(name="")) == "")
+
+    mem = "Dan: he, 35, black t-shirt.\nCrystal: she, 35, white t-shirt."
+    P = ("A kitchen.\n\nDan and Crystal sit at the table.\n\nCrystal laughs.\n\n"
+         "Dan walks out of the kitchen.\n\nCrystal reads.")
+    said = str(run_node(P, character_memory=mem, clip=LoraCLIP())[2])
+    check("the run says what is attached, and where",
+          "1 on the TEXT ENCODER over 4 weights at strength 0.8" in said, said[:200])
+    check("...naming the last one applied", "last one applied: crystal_v3" in said)
+    check("...and why it is worth reporting at all",
+          "neither writes nor can read out of your text" in said)
+
+    # A run with no LoRA anywhere says nothing about LoRA at all.
+    quiet = str(run_node(P, character_memory=mem)[2])
+    check("a run with no LoRA reports none", "LoRA:" not in quiet)
+
+
 def test_verbatim_sends_your_text_and_nothing_else():
     """"This should be automatically verbatim, so the node has no room to invent."
 
@@ -6596,8 +6789,10 @@ def test_a_working_character_is_not_still_lying_down():
     sh2 = [x for x in re.split(r"(?=\[Shot )",
                                run_node(P2, plan_only=True, character_memory=mem)[3])
            if x.strip()]
+    # Held either way: named when the poses differ, impersonal when everybody in the
+    # shot shares one -- naming somebody twice is what draws a second copy of them.
     check("a pose nothing contradicts is still held",
-          "is sitting" in sh2[1])
+          bool(re.search(r"\b(?:is|are) sitting", sh2[1])), sh2[1][-160:])
 
 
 def test_pacing_reaches_the_thin_shots():
@@ -8164,6 +8359,10 @@ def main():
     test_a_walk_is_not_its_own_reverse()
     test_an_exact_line_is_yours_untouched()
     test_verbatim_sends_your_text_and_nothing_else()
+    test_an_untagged_reference_is_claimed_or_held()
+    test_one_photographed_face_and_two_people()
+    test_a_shared_pose_names_nobody()
+    test_a_lora_is_reported()
     test_the_camera_is_held_where_nothing_places_it()
     test_a_carried_room_is_not_a_second_picture_of_somebody()
     test_a_bare_region_is_said_on_every_shot()

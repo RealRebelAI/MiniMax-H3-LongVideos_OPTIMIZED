@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+import uuid
 
 import torch
 
@@ -5056,6 +5057,50 @@ def contact_hold(pairs):
             f"{ps[1][1]}: two pairs, each body with its own partner.")
 
 
+# WHAT LORA IS ON THIS RUN, which nothing here could see before.
+#
+# Reported: character duplicates that survive every guard in this file. A LoRA is
+# the one input to a shot the node does not write and cannot read out of the text,
+# and it is invisible in the output: two runs whose prompts are identical render
+# differently and nothing says why.
+#
+# ComfyUI keeps the patches on the patcher -- `patches` maps a weight name to the
+# list of (strength, delta, ...) tuples applied to it, one entry per LoRA that
+# touched that weight -- so how many are stacked, how strongly, and whether the
+# TEXT ENCODER carries them too can all be read off the objects this node is
+# handed. Names are not kept there; the last LoRA's safetensors metadata is, under
+# the "lora_metadata" attachment, and that usually carries one.
+def lora_facts(patcher):
+    """(stacked LoRAs, weights touched, [strengths]) for a model or a CLIP patcher."""
+    patches = getattr(patcher, "patches", None)
+    if not isinstance(patches, dict) or not patches:
+        return (0, 0, [])
+    stacked = max((len(v) for v in patches.values() if isinstance(v, (list, tuple))), default=0)
+    strengths = []
+    for entries in patches.values():
+        for entry in entries if isinstance(entries, (list, tuple)) else []:
+            try:
+                value = round(float(entry[0]), 3)
+            except (TypeError, ValueError, IndexError):
+                continue
+            if value not in strengths:
+                strengths.append(value)
+    return (stacked, len(patches), sorted(strengths, reverse=True))
+
+
+def lora_name_of(patcher):
+    """The last-applied LoRA's own name, if its metadata carries one."""
+    meta = getattr(patcher, "attachments", {}) or {}
+    meta = meta.get("lora_metadata") if isinstance(meta, dict) else None
+    if not isinstance(meta, dict):
+        return ""
+    for key in ("modelspec.title", "ss_output_name", "ss_session_id"):
+        value = str(meta.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def cast_hold(names, beat="", extras=False):
     """A positive body-count constraint for a one- or two-person composition.
 
@@ -6506,6 +6551,15 @@ def posture_hold(poses, described):
     # the pose is the entire guarantee; "as before" was never part of it.
     if len(who) == 1:
         return f" {who[0][0]} is {who[0][1]}."
+    # ONE POSE SHARED BY EVERYBODY NEEDS NO NAMES AT ALL. "Dan is sitting; Crystal
+    # is sitting" spends a naming of each of them to say one thing about the pair,
+    # and this file's own rule is that naming somebody twice in one shot is what
+    # draws a second copy of them. Said impersonally it costs none, and nothing is
+    # lost: the pose is the whole guarantee, and every described person has it.
+    _poses = {p for _n, p in who}
+    if len(_poses) == 1 and len(who) == len(set(described or [])):
+        return (f" Both are {who[0][1]}." if len(who) == 2
+                else f" Everyone in the shot is {who[0][1]}.")
     said = "; ".join(f"{n} is {p}" for n, p in who[:2])
     return f" {said}."
 
@@ -9717,6 +9771,7 @@ class H3LongVideos:
         frame_shots = []            # shots told what the frame holds
         exact_shots = []            # shots carrying an exact: line of the author's
         camera_shots = []           # shots told the camera holds still
+        named_often = []            # (shot, name, times named, times this node named them)
         contact_shots = []          # shots told which body is with which
         led_shots = []              # shots whose beat was put ahead of the sheet
         restarted = []              # shots started fresh after a removal
@@ -9978,6 +10033,43 @@ class H3LongVideos:
                 _seen_before.update(active)
             else:
                 shot_sheet = sheet
+            # WHERE THIS SHOT IS AND WHO ITS FRAME CARRIES, decided here rather than
+            # further down, because the TEXT is assembled in between and both answers
+            # belong in it. The room settles whether the chain breaks; the carry
+            # settles who is in the picture without being named by the beat.
+            _frm, _via, _to = travel_legs(body)
+            _is_travel = bool(travel_anchor(_frm, _via, _to, here, body))
+            _room_before = here
+            _place_now = _to or _frm or place_named(body) or here
+            _opens_in = _frm or (_room_before if _is_travel else _place_now)
+            _is_cut = bool(len(plan) and _opens_in and _room_before
+                           and _opens_in != _room_before)
+            # The render's own fresh starts: after a removal, or for somebody introduced
+            # in position, the frame before rides as a reference unless it cannot.
+            _prev_stays = shot_frames.get(len(plan) - 1, ([], []))[1]
+            _no_carry = not _cond_module.may_carry_frame(
+                _prev_stays, active,
+                {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)})
+            _fresh = (_is_cut
+                      or (restart_after_removal and (len(plan) - 1) in stripped_shots
+                          and _no_carry)
+                      or (len(plan) in _placed_shots and _no_carry)
+                      or bool(_ALONE.search(engine.staged_text(body))))
+            _kept = [] if _fresh else list(_in_frame)
+            # SOMEBODY STILL IN THE FRAME, STAGED WALKING IN. "Dan sits at the table",
+            # "Crystal walks in", "Dan walks in with the mugs": nothing walked Dan out,
+            # so the frame this shot opens on still has him sitting there, and the text
+            # brings in another one. That is a second Dan, and no wording undoes a
+            # picture. The shot starts fresh instead, the same trade a room change makes.
+            # Only for somebody the previous shot did not describe -- a person it staged
+            # at the door walks in from the door -- and never on a walk between rooms,
+            # whose keyframe is the room being left.
+            _again = [n for n in comes_in(body, sheet)
+                      if n in _kept and n not in _was] if (plan and not _is_travel) else []
+            if _again:
+                reentry_shots[len(plan)] = _again
+                _kept = []
+            _carry = [n for n in _kept if n not in active]
             # Read the removal out of the beat itself. Explicit 'remove:' lines still
             # win and are added to whatever is inferred.
             if auto_remove:
@@ -10786,7 +10878,6 @@ class H3LongVideos:
             # destination is read by the SIZING too, and a transit rendered as a walk
             # while sized as if it went nowhere is how a three-room walk ended up in a
             # three-second shot. See travel_legs and travel_spaces.
-            _frm, _via, _to = travel_legs(body)
             _travel = travel_anchor(_frm, _via, _to, here, body)
             if _travel:
                 travel_shots.append(len(plan) + 1)
@@ -10799,9 +10890,8 @@ class H3LongVideos:
                 if _travel:
                     open_moves.append((len(plan) + 1, _open_to))
             # The room the next beat starts from: where this one ended, or where it
-            # simply says everyone is.
-            _room_before = here
-            here = _to or _frm or place_named(body) or here
+            # simply says everyone is. Both decided above, before the text was written.
+            here = _place_now
             # A ROOM THE KEYFRAME IS NOT IN IS A CUT.
             #
             # Every shot is anchored to the previous shot's last frame, and a keyframe
@@ -10818,8 +10908,7 @@ class H3LongVideos:
             # OPENS, not on whether the room changed. A beat naming an origin of its own
             # is judged on that origin, so "walks from the bedroom to the bathroom"
             # after a kitchen shot is still a cut.
-            _opens_in = _frm or (_room_before if _travel else here)
-            if (len(plan) and _opens_in and _room_before and _opens_in != _room_before):
+            if _is_cut:
                 cut_shots.add(len(plan))
             shot_rooms[len(plan)] = (_opens_in or "", here or "")
             # WHO THE FRAMES SHOW, which is not who the text describes. A shot that
@@ -10827,31 +10916,6 @@ class H3LongVideos:
             # from: they stay in it until a beat walks them out, the camera goes to a
             # room they are not in, or the chain breaks. Read by the render wherever a
             # frame is used as a picture of the people in it. See _EXIT.
-            # The render's own fresh starts: after a removal, or for somebody introduced
-            # in position, the frame before rides as a reference unless it cannot.
-            _prev_stays = shot_frames.get(len(plan) - 1, ([], []))[1]
-            _no_carry = not _cond_module.may_carry_frame(
-                _prev_stays, active,
-                {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)})
-            _fresh = (len(plan) in cut_shots
-                      or (restart_after_removal and (len(plan) - 1) in stripped_shots
-                          and _no_carry)
-                      or (len(plan) in _placed_shots and _no_carry)
-                      or bool(_ALONE.search(engine.staged_text(body))))
-            _kept = [] if _fresh else list(_in_frame)
-            # SOMEBODY STILL IN THE FRAME, STAGED WALKING IN. "Dan sits at the table",
-            # "Crystal walks in", "Dan walks in with the mugs": nothing walked Dan out,
-            # so the frame this shot opens on still has him sitting there, and the text
-            # brings in another one. That is a second Dan, and no wording undoes a
-            # picture. The shot starts fresh instead, the same trade a room change makes.
-            # Only for somebody the previous shot did not describe -- a person it staged
-            # at the door walks in from the door -- and never on a walk between rooms,
-            # whose keyframe is the room being left.
-            _again = [n for n in comes_in(body, sheet)
-                      if n in _kept and n not in _was] if (plan and not _travel) else []
-            if _again:
-                reentry_shots[len(plan)] = _again
-                _kept = []
             _carry = [n for n in _kept if n not in active]
             _shows = list(active) + _carry
             # A walk to another room leaves behind whoever it does not describe.
@@ -11735,6 +11799,18 @@ class H3LongVideos:
             # sent. See the widget's tooltip for what comes back with them.
             shot_text = ((line + _exact).strip() if verbatim
                          else (line + _exact + _cast_hold + _kept).strip())
+            # HOW OFTEN ONE PERSON IS NAMED IN ONE SHOT, counted where the shot is
+            # finished. This file's own rule is that naming somebody twice in a shot is
+            # what draws a second copy of them -- every clause that owns a fact pays
+            # that price to say whose fact it is -- and nothing was watching the total.
+            # Reported, not enforced: the beat's own mentions are the author's, and the
+            # clauses that name people do it to stop a fact landing on the wrong one.
+            for _n in (_described or []):
+                _total = len(re.findall(r"\b" + re.escape(_n) + r"\b", shot_text))
+                if _total >= 3:
+                    _mine = _total - len(re.findall(r"\b" + re.escape(_n) + r"\b",
+                                                    f"{_scene_sent} {body} {_exact}"))
+                    named_often.append((len(plan) + 1, _n, _total, _mine))
             # Sound direction is not a continuity guard -- it asks for something to
             # HAPPEN rather than for something to stay as it is -- so it is counted
             # apart, or the balance report blames the wrong text for crowding the beat.
@@ -11790,6 +11866,23 @@ class H3LongVideos:
                      "they are named in, this one included"
                    if _bare else
                    ". All of them carry a reference tag, which is what pins them here"))
+        _lora_model = lora_facts(model)
+        _lora_clip = lora_facts(getattr(clip, "patcher", None))
+        if _lora_model[0] or _lora_clip[0]:
+            _name = lora_name_of(model) or lora_name_of(getattr(clip, "patcher", None))
+            _said = []
+            if _lora_model[0]:
+                _said.append(f"{_lora_model[0]} on the model over {_lora_model[1]} weights at "
+                             f"strength {', '.join(f'{v:g}' for v in _lora_model[2][:4])}")
+            if _lora_clip[0]:
+                _said.append(f"{_lora_clip[0]} on the TEXT ENCODER over {_lora_clip[1]} weights at "
+                             f"strength {', '.join(f'{v:g}' for v in _lora_clip[2][:4])}")
+            notes.append(
+                f"LoRA: {'; '.join(_said)}"
+                + (f" -- last one applied: {_name}" if _name else "")
+                + ". Reported because it is the one input to a shot this node neither "
+                  "writes nor can read out of your text: two runs whose prompts are "
+                  "identical render differently and nothing else here says why")
         if verbatim:
             # FIRST in the list, because every note after it describes a clause this run
             # did not send. They are kept rather than suppressed: what the node WOULD
@@ -11998,6 +12091,19 @@ class H3LongVideos:
                 f"only -- a beat that pairs nobody by name ('they kiss') gets nothing, "
                 f"because guessing which two is the bug. With two people in the shot "
                 f"nothing is said: there is nobody else to pair with")
+        if named_often:
+            _worst = sorted(named_often, key=lambda r: -r[2])[:6]
+            notes.append(
+                "named more than twice in one shot -- "
+                + "; ".join(f"shot {n}: {who} {times}x ({mine} from this node)"
+                            for n, who, times, mine in _worst)
+                + ". Naming a person twice in one shot is what draws a second copy of "
+                  "them, and every clause that owns a fact -- a pose, a look, whose "
+                  "voice it is, who is wearing what -- pays a naming to say whose fact "
+                  "it is. Worth reading when duplicates persist: the ones from this node "
+                  "go away with the guard that writes them (hold_gaze, hold_scene_state, "
+                  "auto_sound, or verbatim for all of them), and the ones from your beat "
+                  "are yours to rewrite -- a pronoun costs nothing")
         if camera_shots:
             notes.append(
                 f"shot(s) {', '.join(str(n) for n in camera_shots)} say nothing about the "
@@ -12775,13 +12881,18 @@ class H3LongVideos:
         _tagged = bool(picture_tags(_written)
                        or any(picture_tags(s) for s in plan.prompts))
         _tagged_names = {n for n, ln in sheet_lines(sheet) if n and picture_tags(ln)}
+        _claimed_untagged, _held_untagged = [], []
         if refs_all and not _tagged:
             notes.append(
                 f"{len(refs_all)} reference image(s) connected and no <Picture N> tag "
-                f"anywhere, so they go on EVERY shot -- placing by tag would place them "
-                f"nowhere. To aim them, write the tag on the person they depict: 'Nora: "
-                f"<Picture 1>, 34, she, ...'. Each then travels with that person into "
-                f"the shots she is in, and only those")
+                f"anywhere. A picture the text NAMES is that subject; one it never "
+                f"mentions is another subject standing beside them -- which is a second "
+                f"person no wording in this node can argue with, because it arrives as a "
+                f"picture. So an untagged reference is claimed where the claim is "
+                f"unambiguous -- one picture, one person described in the shot, the tag "
+                f"written onto their sheet entry -- and held back where it is not. TAG "
+                f"IT and neither happens: 'Nora: <Picture 1>, 34, she, ...' sends it into "
+                f"the shots Nora is in, and only those")
         for _i, _s in enumerate(plan.prompts):
             # The tag is the BINDING between a picture and the subject the prompt
             # describes, and it stays IN the text -- comfy_extras/nodes_minimax_h3.py:
@@ -12790,7 +12901,38 @@ class H3LongVideos:
             # order it receives images and a shot carrying only slot 2 receives that
             # image as <Picture 1>.
             if not _tagged:
-                plan.shots[_i].refs = list(refs_all)
+                # AN UNTAGGED REFERENCE WAS SENT WITH NOTHING NAMING IT, on every shot.
+                #
+                # That is this file's oldest rule broken in its commonest setup: "a
+                # picture the prompt refers to is that subject; one it never mentions
+                # is ANOTHER subject" -- and connecting a face to ref_image_1 without
+                # writing a tag is how most people wire one up. Reported as duplicate
+                # characters that survive every guard here, because no guard in this
+                # file can argue with a second subject arriving as a PICTURE.
+                #
+                # Claimed where the claim is unambiguous: one picture, and one person
+                # described in the shot. That person is who a lone face reference
+                # depicts in every real script, and the tag goes on their sheet entry
+                # exactly as a written one would.
+                #
+                # HELD where it is not. Two pictures, or two people in the shot, and
+                # the node would be guessing which picture is whom -- so the shot goes
+                # without, the same answer every other unclaimable picture here gets.
+                # A reference that does not ride costs likeness; one that rides
+                # unclaimed costs a second person, and the author is told to tag it.
+                _here = [n for n in plan.shots[_i].cast if n]
+                if not _here:
+                    # NOBODY TO DUPLICATE. A shot with no person described in it cannot
+                    # grow a second character, whatever the picture is of, so a look or
+                    # a location reference rides as it always did.
+                    plan.shots[_i].refs = list(refs_all)
+                elif len(refs_all) == 1 and f"{_here[0]}:" in _s and len(_here) == 1:
+                    plan.shots[_i].prompt = _s.replace(f"{_here[0]}:", f"{_here[0]}: <Picture 1>,", 1)
+                    plan.shots[_i].refs = list(refs_all)
+                    _claimed_untagged.append(_i + 1)
+                else:
+                    plan.shots[_i].refs = []
+                    _held_untagged.append(_i + 1)
                 continue
             _s, _r, _missing = resolve_tags(_s, refs_all)
             plan.shots[_i].prompt = _s
@@ -12799,6 +12941,19 @@ class H3LongVideos:
                 _msg = f"<Picture {_n}> names a slot with no image connected"
                 if _msg not in notes:
                     notes.append(_msg)
+        if _claimed_untagged:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _claimed_untagged)} had the untagged "
+                f"reference claimed on the one person they describe, so the picture has a "
+                f"subject in the text instead of arriving as a stranger")
+        if _held_untagged:
+            notes.append(
+                f"shot(s) {', '.join(str(n) for n in _held_untagged)} were sent NO "
+                f"reference: more than one picture or more than one person is in them, and "
+                f"which picture is whom is not something this node can guess. Sent "
+                f"unclaimed it would be a second person in the shot; held back it costs "
+                f"likeness there. Tag the pictures -- 'Dan: <Picture 1>, ...' -- and they "
+                f"ride every shot that names their subject, claimed")
         # ONE FACE, TWO PEOPLE. A shot that carries a picture for somebody AND
         # describes somebody else who has none gives the model a photographed face
         # and two faces to draw. A reference is the strongest identity signal in the
@@ -13181,6 +13336,7 @@ class H3LongVideos:
         _captured_gen = {}          # name -> the wardrobe generation that frame shows
         _soft_cuts = []             # (shot, why) cuts that carried the frame as a reference
         _recovered = []             # (shot, name, source shot) actually pinned
+        _evened = []                # (shot, name, source shot) given a face beside a tagged one
         _room_frames = {}           # room -> [(last frame there, who was in it, wardrobe generation, shot)], newest first
         _room_returns = []          # (shot, room, source shot) actually carried
         _wardrobe_gen = 0           # bumped by every shot that changes what anybody wears or is held by
@@ -13362,6 +13518,36 @@ class H3LongVideos:
                         f"{_who}:", f"{_who}: {_tag},", 1)
                 else:
                     shot_prompt = f"{shot_prompt} {_who} is the person in {_tag}."
+            # ONE PHOTOGRAPHED FACE AND TWO PEOPLE TO DRAW.
+            #
+            # A shot that carries a reference for one person and describes another who
+            # has none is the node's oldest unanswered duplicate: a reference is the
+            # strongest identity signal in a prompt -- far stronger than "35, dark
+            # hair" -- so the one that exists gets used for both bodies, and the second
+            # character arrives as a copy of the first. Reported as two of the same
+            # person in a scene written for two, and this file's own note on it said
+            # the node could not stop it: there is no sentence that outranks a photo.
+            #
+            # There is no sentence, but there is a PICTURE. The node has been keeping
+            # one all along -- a frame from a shot that held that person alone, at the
+            # wardrobe they are wearing now, the same frames a returning face is
+            # recovered from. Sending it evens the shot up: two people, two pictures,
+            # neither one the only face in the prompt.
+            #
+            # Narrow, for the same reasons the recovered face is: one person short of a
+            # picture (with two, which frame is whose becomes a guess), a frame that
+            # shows them ALONE, and nothing else already recovered for this shot.
+            elif _tagged_names and len(_cast) > 1 and any(n in _tagged_names for n in _cast):
+                _short = [n for n in _cast
+                          if n and n not in _tagged_names
+                          and _captured.get(n) is not None
+                          and _captured_gen.get(n) == _wardrobe_gen]
+                if len(_short) == 1 and f"{_short[0]}:" in shot_prompt:
+                    _extra = [_captured[_short[0]]]
+                    _evened.append((i + 1, _short[0], _captured_from.get(_short[0], 0)))
+                    _tag = f"<Picture {len(shot.refs) + 1}>"
+                    shot_prompt = shot_prompt.replace(
+                        f"{_short[0]}:", f"{_short[0]}: {_tag},", 1)
             # The handoff, when it is demoted to a reference, is a picture like any
             # other and has to be claimed or it reads as a second person. Decided
             # here rather than inside build_conditioning because the claim is text,
@@ -13846,6 +14032,20 @@ class H3LongVideos:
                     f"and join the parts outside the node), a lower megapixels, or a "
                     f"smaller diffusion quant -- every GB of weights is a GB not "
                     f"available to hold the render")
+        if _evened:
+            notes.append(
+                "; ".join(f"shot {n} gave {who} a face of their own, from shot {src}"
+                          for n, who, src in _evened)
+                + " -- each of those shots carried a reference for somebody else and "
+                  "described them with none, which is one photographed face and two "
+                  "people to draw. A reference is the strongest identity signal in a "
+                  "prompt, so the one that exists gets used for both bodies and the "
+                  "second character arrives as a copy of the first. The frame sent is "
+                  "one this run rendered, from a shot that held them alone in the "
+                  "clothes they are wearing now, and it is claimed on their own sheet "
+                  "entry. Tagging them with a <Picture N> of their own does the same "
+                  "thing from the first shot instead of the second"
+            )
         if _soft_cuts:
             notes.append(
                 "carried the previous frame as a REFERENCE across a cut -- "

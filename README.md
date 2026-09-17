@@ -120,6 +120,14 @@ Mike: he, 41, dark hair, navy overalls.
 `<Picture N>` means `ref_image_N`, the socket. Tag it onto the person or thing it
 depicts and it follows them; untagged, a reference goes on every shot.
 
+### LoRAs
+
+A LoRA is the one input to a shot this node neither writes nor can read out of your
+text, so `info` reports what is attached: how many are stacked, over how many weights,
+at what strength, whether the **text encoder** carries them too, and the last one's
+name if its metadata has one. Two runs whose prompts are identical can render
+differently, and nothing else in the run says why.
+
 ## Settings
 
 | setting | value |
